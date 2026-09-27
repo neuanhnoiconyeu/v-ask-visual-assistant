@@ -1,0 +1,35 @@
+[theme]
+base = "dark"
+font = "sans-serif"
+baseRadius = "large"
+buttonRadius = "large"
+showSidebarBorder = true
+
+[theme.dark]
+primaryColor = "#D62828"
+backgroundColor = "#101216"
+secondaryBackgroundColor = "#1A1D24"
+textColor = "#F1F2F4"
+borderColor = "#343841"
+
+[theme.dark.sidebar]
+backgroundColor = "#15171D"
+secondaryBackgroundColor = "#1B1E25"
+textColor = "#F1F2F4"
+primaryColor = "#D62828"
+
+[theme.light]
+primaryColor = "#B3262D"
+backgroundColor = "#F7F4EF"
+secondaryBackgroundColor = "#ECE8E1"
+textColor = "#292521"
+borderColor = "#D8D1C8"
+
+[theme.light.sidebar]
+backgroundColor = "#F0ECE6"
+secondaryBackgroundColor = "#E7E2DA"
+textColor = "#292521"
+primaryColor = "#B3262D"
+
+[server]
+maxUploadSize = 20
