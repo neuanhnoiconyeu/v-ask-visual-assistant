@@ -1,60 +1,72 @@
-# V-Ask — Vietnamese Personal AI
+﻿# V-Ask — Vietnamese Personal AI
 
-Trợ lý cá nhân dùng Streamlit, OpenAI Python SDK và NVIDIA Nemotron qua Nebius Token Factory. Chat/ghi chú được lưu trong SQLite cục bộ; tài liệu tải lên được trích xuất và tìm kiếm cục bộ. Chỉ các đoạn liên quan mới được gửi tới Nebius khi đặt câu hỏi.
+V-Ask is a privacy-conscious personal assistant built with Streamlit, NVIDIA Nemotron, and Nebius Token Factory. Chat history and personal notes are stored locally in SQLite. PDF and TXT documents are extracted and searched locally; only relevant excerpts are sent to Nebius when generating an answer.
 
-## Cấu trúc
+## Project structure
 
 ```text
 v-ask-visual-assistant/
-├── app.py                 # Giao diện Streamlit và điều phối
-├── config.py              # Cấu hình ứng dụng
-├── llm_client.py          # OpenAI SDK → Nebius Token Factory
-├── memory.py              # Chat và ghi chú trong SQLite
-├── rag.py                 # Đọc PDF/TXT, chia đoạn, tìm kiếm cục bộ
-├── desktop_actions.py     # Mở ứng dụng allowlist và YouTube
+├── app.py                 # Streamlit interface and app orchestration
+├── config.py              # Shared configuration
+├── llm_client.py          # OpenAI SDK client for Nebius Token Factory
+├── memory.py              # SQLite chat history and personal notes
+├── rag.py                 # Local PDF/TXT extraction, chunking, and retrieval
+├── desktop_actions.py     # Confirmed app launch and YouTube search actions
+├── assets/                # V-Ask logo assets
+├── .streamlit/config.toml # Streamlit themes and upload settings
 ├── requirements.txt
-├── .env.example
-└── .streamlit/config.toml
+└── .env.example
 ```
 
-## Chạy ứng dụng
+## Requirements
 
-1. Cài Python 3.10 trở lên, tạo môi trường ảo và cài thư viện:
+- Python 3.10 or later
+- A Nebius Token Factory API key
+- A Nemotron model enabled for your Nebius account
 
-   ```bash
+## Run locally
+
+1. Create and activate a virtual environment, then install dependencies:
+
+   ```powershell
    python -m venv .venv
-   # Windows: .venv\Scripts\activate
-   # macOS/Linux: source .venv/bin/activate
+   .\.venv\Scripts\Activate.ps1
    pip install -r requirements.txt
    ```
 
-2. Tạo biến môi trường `NEBIUS_API_KEY` bằng API key từ Nebius Token Factory. Có thể tùy chỉnh `NEBIUS_MODEL` theo model ID Nemotron được bật trong tài khoản. Tránh commit key vào Git.
-3. Khởi chạy:
+2. Open `.streamlit/secrets.toml` and add your key:
 
-   ```bash
+   ```toml
+   NEBIUS_API_KEY = "your-nebius-api-key"
+   ```
+
+   The file is ignored by Git. Set `NEBIUS_MODEL` as an environment variable if you need a different model ID; the default is configured in `config.py`.
+
+3. Start the app:
+
+   ```powershell
    streamlit run app.py
    ```
 
-SQLite mặc định ở `data/vask.sqlite3`; thư mục `data/` bị gitignore. Đổi vị trí bằng `VASK_DATA_DIR`. Mỗi máy chạy app dùng bộ nhớ riêng.
+The app stores its local database at `data/vask.sqlite3`. Set `VASK_DATA_DIR` to use another local directory. Each installation maintains its own memory.
 
-## RAG và riêng tư
+## Features and privacy
 
-PDF/TXT được trích xuất trong tiến trình Streamlit và lưu trong session hiện tại, không ghi nội dung tài liệu xuống đĩa. Bộ truy hồi từ khóa chọn tối đa năm đoạn liên quan; các đoạn đó cùng lịch sử chat gần nhất sẽ được gửi đến Nebius để sinh câu trả lời. Tài liệu không được nhúng hay gửi toàn bộ. Không tải lên nội dung nhạy cảm nếu không muốn đoạn trích rời khỏi thiết bị.
+- **Local memory:** Chat history and personal notes are stored in SQLite on the device running V-Ask.
+- **Local document retrieval:** PDF and TXT files are extracted and searched in the current Streamlit session. Document text is not written to disk by the RAG module. Relevant excerpts are sent to Nebius for answers. Long summary requests are limited to the configured context size.
+- **Desktop actions:** Applications must be listed in the allowlist in `desktop_actions.py`. App launches and YouTube searches require an explicit confirmation. YouTube opens search results; it does not automatically start playback.
+- **Themes:** The Streamlit settings menu supports custom Light and Dark themes. The app uses Be Vietnam Pro when Google Fonts is available and falls back to Segoe UI.
 
-## Desktop actions
+## Two-person task assignment
 
-Hành động không chạy lệnh shell tùy ý. `desktop_actions.py` có allowlist mẫu (Notepad, Calculator) có thể chỉnh theo máy. Giao diện cung cấp nút xác nhận cho thao tác mở ứng dụng hoặc tìm trên YouTube. Chức năng mở trình duyệt dùng truy vấn tìm kiếm; nó không tự phát video.
-
-## Chia việc cho 2 thành viên
-
-| Thành viên | Phạm vi sở hữu | Các file chính |
+| Team member | Ownership | Main files |
 |---|---|---|
-| A — AI, bộ nhớ và RAG | Gọi Nebius; thiết kế prompt; schema/truy vấn SQLite; đọc, chia đoạn và truy hồi PDF/TXT; xử lý lỗi provider. Giao tiếp qua API `answer(messages, context)`, `memory.*`, `extract_text()` và `retrieve()`. | `llm_client.py`, `memory.py`, `rag.py`, `config.py`, `requirements.txt` |
-| B — Sản phẩm và tích hợp máy tính | Streamlit UI, luồng tải file, hiển thị lịch sử/ghi chú, UX xác nhận hành động desktop, README và cấu hình giao diện. Tích hợp module A qua public function, tránh sửa implementation nội bộ của chúng. | `app.py`, `desktop_actions.py`, `.streamlit/`, `README.md`, `.gitignore` |
+| A — AI, memory, and RAG | Nebius client and prompts; SQLite schema and queries; PDF/TXT extraction, chunking, retrieval, and provider error handling. Coordinate through the public interfaces `answer(messages, context)`, `memory.*`, `extract_text()`, and `retrieve()`. | `llm_client.py`, `memory.py`, `rag.py`, `config.py`, `requirements.txt` |
+| B — Product UI and desktop integration | Streamlit interface, uploads, notes and chat display, theme styling, confirmed desktop actions, and setup documentation. Consume member A's public functions without editing their implementation. | `app.py`, `desktop_actions.py`, `.streamlit/`, `README.md`, `.gitignore` |
 
-### Quy ước Git để tránh xung đột
+### Git workflow
 
-- Làm trên branch riêng: `feature/ai-memory-rag` và `feature/streamlit-actions`.
-- Không cùng sửa `app.py` hoặc `memory.py`; thay đổi giao diện do B giữ, logic lưu trữ do A giữ.
-- Giữ chữ ký public function ổn định; nếu cần đổi, báo qua issue/PR trước khi tích hợp.
-- Mỗi nhánh commit riêng, mở PR vào `main`; tích hợp A trước để B gọi được API đã ổn định.
+- Work on separate branches: `feature/ai-memory-rag` and `feature/streamlit-actions`.
+- Keep UI changes in `app.py` with member B, and storage/retrieval changes in `memory.py` and `rag.py` with member A.
+- Keep public function signatures stable; discuss interface changes before integrating.
+- Commit on feature branches and open pull requests into `main`. Integrate the AI/memory/RAG interfaces before the UI branch depends on them.
