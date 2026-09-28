@@ -54,6 +54,7 @@ The app stores its local database at `data/vask.sqlite3`. Set `VASK_DATA_DIR` to
 
 - **Local memory:** Chat history and personal notes are stored in SQLite on the device running V-Ask.
 - **Local document retrieval:** PDF and TXT files are extracted and searched in the current Streamlit session. Document text is not written to disk by the RAG module. Relevant excerpts are sent to Nebius for answers. Long summary requests are limited to the configured context size.
+- **Spotify player:** On Windows, a Spotify-style bar shows artwork, title, artist, playback progress, and controls using the local Spotify Desktop media session. No Spotify login or Client ID is needed.
 - **Desktop actions:** Applications must be listed in the allowlist in `desktop_actions.py`. App launches and YouTube searches require an explicit confirmation. YouTube opens search results; it does not automatically start playback.
 - **Themes:** The Streamlit settings menu supports custom Light and Dark themes. The app uses Be Vietnam Pro when Google Fonts is available and falls back to Segoe UI.
 

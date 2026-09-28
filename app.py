@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from config import MAX_UPLOAD_MB
 from desktop_actions import APP_ALLOWLIST, detect_action, open_application, open_youtube
@@ -11,6 +12,8 @@ from llm_client import answer
 from memory import (add_message, add_note, clear_conversation, delete_note,
                     get_messages, get_notes, initialize, new_conversation)
 from rag import all_document_context, extract_text, retrieve
+from now_playing import control_spotify, get_spotify_now_playing
+import base64
 
 LOGO_PATH = Path(__file__).parent / "assets" / "vask-logo-transparent.png"
 st.set_page_config(page_title="V-Ask | Personal AI", page_icon=LOGO_PATH, layout="wide")
@@ -71,6 +74,67 @@ html, body, input, textarea, button, label, p, h1, h2, h3,
     border-color: rgba(214,40,40,.8);
     box-shadow: 0 0 0 1px rgba(214,40,40,.35);
 }
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
+    padding: .15rem; border-radius: 14px; color: #f4f4f5;
+    background: #08090b; border: 1px solid #252629;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] { color: #f4f4f5; }
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"] { color: #a1a1aa; }
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stImage"] img { border-radius: 7px; object-fit: cover; }
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stButton"] > button {
+    color: #e4e4e7; background: transparent; border: 0; min-height: 2rem;
+    font-size: 1rem; padding: 0; box-shadow: none;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stButton"] > button:hover { color: #fff; background: #202124; transform: none; }
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stSlider"] { padding-top: 0; padding-bottom: 0; }
+[data-testid="stSidebar"] .music-timeline { margin: .25rem .05rem .3rem; }
+[data-testid="stSidebar"] .music-progress-track { height: 4px; background: #424247; border-radius: 99px; overflow: hidden; }
+[data-testid="stSidebar"] .music-progress-fill { height: 100%; background: #e7e7e9; border-radius: 99px; position: relative; }
+[data-testid="stSidebar"] .music-progress-fill::after { content: ""; position: absolute; right: -4px; top: -2px; width: 8px; height: 8px; background: #fff; border-radius: 50%; }
+[data-testid="stSidebar"] .music-time-row { display: flex; justify-content: space-between; margin-top: 4px; color: #a1a1aa; font-size: .72rem; line-height: 1.1; }
+[data-testid="stSidebar"] .music-controls [data-testid="stButton"] > button { min-height: 1.85rem; }
+[data-testid="stSidebar"] [class*="st-key-music_previous"] button,
+[data-testid="stSidebar"] [class*="st-key-music_play"] button,
+[data-testid="stSidebar"] [class*="st-key-music_pause"] button,
+[data-testid="stSidebar"] [class*="st-key-music_next"] button {
+    width: 2.45rem !important; height: 2.45rem !important; min-height: 2.45rem !important;
+    border-radius: 50% !important; padding: 0 !important; display: flex !important;
+    align-items: center !important; justify-content: center !important;
+    background: #202126 !important; border: 1px solid #373840 !important;
+    font-size: 1rem !important;
+}
+[data-testid="stSidebar"] [class*="st-key-music_previous"] button span,
+[data-testid="stSidebar"] [class*="st-key-music_play"] button span,
+[data-testid="stSidebar"] [class*="st-key-music_pause"] button span,
+[data-testid="stSidebar"] [class*="st-key-music_next"] button span { margin: 0 !important; line-height: 1 !important; }
+[data-testid="stSidebar"] [class*="st-key-music_play"] button > div,
+[data-testid="stSidebar"] [class*="st-key-music_pause"] button > div {
+    width: 100%; height: 100%; display: flex !important;
+    align-items: center !important; justify-content: center !important;
+}
+[data-testid="stSidebar"] [class*="st-key-music_play"] button { position: relative !important; }
+[data-testid="stSidebar"] [class*="st-key-music_play"] button::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 0; height: 0; transform: translate(-35%, -50%);
+    border-top: 8px solid transparent; border-bottom: 8px solid transparent;
+    border-left: 12px solid #e4e4e7;
+}
+[data-testid="stSidebar"] [class*="st-key-music_pause"] button { position: relative !important; }
+[data-testid="stSidebar"] [class*="st-key-music_pause"] button::after {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 14px; height: 16px;
+    transform: translate(-50%, -50%); border-radius: 2px;
+    background: linear-gradient(to right, #e4e4e7 0 35%, transparent 35% 65%, #e4e4e7 65% 100%);
+}
+[data-testid="stSidebar"] [class*="st-key-music_previous"] button,
+[data-testid="stSidebar"] [class*="st-key-music_next"] button { position: relative !important; }
+[data-testid="stSidebar"] [class*="st-key-music_previous"] button [data-testid="stIconMaterial"],
+[data-testid="stSidebar"] [class*="st-key-music_next"] button [data-testid="stIconMaterial"] {
+    position: absolute !important; left: 50% !important; top: 50% !important;
+    width: 1.4rem; height: 1.4rem; display: flex !important;
+    align-items: center !important; justify-content: center !important;
+    margin: 0 !important; font-size: 1.35rem !important;
+    transform: translate(-50%, -50%) !important;
+}
 .stButton > button, [data-testid="stFormSubmitButton"] > button {
     border-radius: 11px; font-weight: 600; transition: all .16s ease;
 }
@@ -105,77 +169,205 @@ with logo_col:
 with brand_col:
     st.markdown('<div class="brand-title">V-Ask</div><div class="brand-copy">A calmer space for your notes, documents, and everyday questions.</div>', unsafe_allow_html=True)
 
-with st.sidebar:
-    st.subheader("Documents")
-    uploads = st.file_uploader(
-        "Upload PDF or TXT files",
-        type=["pdf", "txt"],
-        accept_multiple_files=True,
-        help=f"Up to {MAX_UPLOAD_MB} MB per file. Relevant excerpts are sent to Nebius when you ask a question.",
-    )
-    if uploads:
-        for uploaded in uploads:
-            if uploaded.size > MAX_UPLOAD_MB * 1024 * 1024:
-                st.error(f"{uploaded.name}: exceeds the {MAX_UPLOAD_MB} MB limit.")
-                continue
-            if uploaded.name not in st.session_state.documents:
-                try:
-                    st.session_state.documents[uploaded.name] = extract_text(uploaded.name, uploaded.getvalue())
-                except ValueError as exc:
-                    st.error(f"{uploaded.name}: {exc}")
-        if st.session_state.documents:
-            st.caption("In this session: " + ", ".join(st.session_state.documents))
-            if st.button("Remove documents from this session"):
-                st.session_state.documents = {}
+@st.cache_data(ttl=5, show_spinner=False)
+def _cached_spotify_track():
+    return get_spotify_now_playing()
+
+
+def _player_time(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _render_spotify_player():
+    with st.container(border=True):
+        try:
+            spotify_track = _cached_spotify_track()
+        except Exception:
+            spotify_track = None
+
+        if spotify_track:
+            art_col, song_col, refresh_col = st.columns([1, 3.2, .7], vertical_alignment="center")
+            with art_col:
+                artwork = spotify_track.get("artwork")
+                if artwork and artwork.startswith("data:image"):
+                    st.image(base64.b64decode(artwork.split(",", 1)[1]), width=54)
+                else:
+                    st.markdown("<div style='font-size:2rem;color:#a1a1aa'>&#9835;</div>", unsafe_allow_html=True)
+            with song_col:
+                st.markdown(f"**{spotify_track['title']}**")
+                st.caption(spotify_track["artist"])
+            if refresh_col.button(" ", icon=":material/refresh:", key="music_refresh", help="Refresh song"):
+                _cached_spotify_track.clear()
                 st.rerun()
 
-    st.divider()
-    st.subheader("Personal notes")
-    with st.form("note_form", clear_on_submit=True):
-        note = st.text_area("Add a note", placeholder="For example: Mom's birthday is...")
-        save_note = st.form_submit_button("Save note")
-    if save_note and note.strip():
-        add_note(note)
-        st.success("Saved on this device.")
-    for item in get_notes():
-        left, right = st.columns([5, 1])
-        left.caption(item["content"])
-        if right.button("x", key=f"delnote_{item['id']}", help="Delete note"):
-            delete_note(item["id"])
-            st.rerun()
+            seek_value = st.query_params.get("music_seek")
+            if seek_value is not None:
+                try:
+                    control_spotify("seek", float(seek_value))
+                finally:
+                    st.query_params.pop("music_seek", None)
+                    _cached_spotify_track.clear()
+                    st.rerun()
 
-    st.divider()
-    st.subheader("Desktop actions")
-    st.caption("Actions only run after you confirm them.")
-    selected_app = st.selectbox("Open an application", list(APP_ALLOWLIST))
-    if st.button(f"Confirm opening {selected_app}"):
-        try:
-            st.success(open_application(selected_app))
-        except (ValueError, RuntimeError, OSError) as exc:
-            st.error(str(exc))
-    with st.form("youtube_form"):
-        video_query = st.text_input("Search YouTube for music or videos")
-        open_video = st.form_submit_button("Open YouTube")
-    if open_video:
-        try:
-            st.success(open_youtube(video_query))
-        except (ValueError, RuntimeError) as exc:
-            st.error(str(exc))
+            spacer_left, previous_col, toggle_col, next_col, spacer_right = st.columns([1, 1, 1, 1, 1])
+            if previous_col.button(" ", icon=":material/skip_previous:", key="music_previous"):
+                control_spotify("previous")
+                _cached_spotify_track.clear()
+                st.rerun()
+            toggle_key = "music_pause" if spotify_track["playing"] else "music_play"
+            if toggle_col.button(" ", key=toggle_key):
+                control_spotify("toggle")
+                _cached_spotify_track.clear()
+                st.rerun()
+            if next_col.button(" ", icon=":material/skip_next:", key="music_next"):
+                control_spotify("next")
+                _cached_spotify_track.clear()
+                st.rerun()
 
+            duration = max(1, int(spotify_track.get("duration") or 1))
+            position = min(duration, max(0, int(spotify_track.get("position") or 0)))
+            progress_pct = min(100.0, (position / duration) * 100)
+            components.html(
+                f'''<!doctype html><html><head><style>
+                    * {{ box-sizing: border-box; }}
+                    html, body {{ margin: 0; padding: 0; background: transparent; overflow: hidden; }}
+                    .timeline {{ padding: 4px 2px 2px; color: #a1a1aa; font: 12px 'Be Vietnam Pro', 'Segoe UI', sans-serif; }}
+                    .track {{ height: 4px; background: #424247; border-radius: 99px; overflow: visible; cursor: pointer; }}
+                    .fill {{ height: 100%; width: {progress_pct:.2f}%; background: #e7e7e9; border-radius: 99px; position: relative; }}
+                    .fill:after {{ content: ''; position: absolute; right: -3px; top: -2px; width: 8px; height: 8px; border-radius: 50%; background: #fff; }}
+                    .times {{ display: flex; justify-content: space-between; margin-top: 7px; line-height: 14px; }}
+                </style></head><body>
+                    <div class="timeline"><div class="track" id="track"><div class="fill" id="fill"></div></div>
+                    <div class="times"><span id="elapsed">{_player_time(position)}</span><span>{_player_time(duration)}</span></div></div>
+                    <script>
+                    (() => {{
+                      let position = {position};
+                      const duration = {duration};
+                      const playing = {str(bool(spotify_track['playing'])).lower()};
+                      const fill = document.getElementById('fill');
+                      const elapsed = document.getElementById('elapsed');
+                      document.getElementById('track').addEventListener('click', event => {{
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const target = Math.round(Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * duration);
+                        window.top.location.search = `?music_seek=${{target}}`;
+                      }});
+                      const format = value => `${{Math.floor(value / 60)}}:${{String(value % 60).padStart(2, '0')}}`;
+                      if (playing) setInterval(() => {{
+                        position = Math.min(duration, position + 1);
+                        fill.style.width = `${{Math.min(100, position / duration * 100)}}%`;
+                        elapsed.textContent = format(position);
+                      }}, 1000);
+                    }})();
+                    </script>
+                </body></html>''',
+                height=36,
+                scrolling=False,
+            )
+            st.caption(spotify_track.get("album") or "Spotify Desktop")
+        else:
+            st.caption("Spotify Desktop - start a song to show it here.")
+            if st.button("Refresh player", key="music_refresh_empty", use_container_width=True):
+                _cached_spotify_track.clear()
+                st.rerun()
+
+with st.sidebar:
+    st.subheader("Now listening")
+    _render_spotify_player()
     st.divider()
-    if st.button("New conversation", use_container_width=True):
-        st.session_state.conversation_id = new_conversation()
-        st.rerun()
-    if st.button("Delete this conversation's history", use_container_width=True):
-        clear_conversation(st.session_state.conversation_id)
-        st.rerun()
+    with st.expander(f"Attached documents ({len(st.session_state.documents)})", expanded=False):
+        if st.session_state.documents:
+            for filename in list(st.session_state.documents):
+                file_col, remove_col = st.columns([5, 1], vertical_alignment="center")
+                file_col.caption(f"?? {filename}")
+                if remove_col.button("?", key=f"remove_doc_{filename}", help=f"Remove {filename}"):
+                    del st.session_state.documents[filename]
+                    st.rerun()
+            if st.button("Clear all files", key="clear_docs", use_container_width=True):
+                st.session_state.documents = {}
+                st.rerun()
+        else:
+            st.caption("Use + in the chat composer to attach PDF or TXT files.")
 
 messages = get_messages(st.session_state.conversation_id)
 for message in messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-prompt = st.chat_input("How can V-Ask help?")
+with st.popover("?", help="V-Ask tools and shortcuts", use_container_width=False):
+    st.caption("TOOLS")
+    with st.expander("Personal notes", expanded=False):
+        with st.form("note_form", clear_on_submit=True):
+            note = st.text_area("Add a note", placeholder="For example: Mom's birthday is...")
+            save_note = st.form_submit_button("Save note", use_container_width=True)
+        if save_note and note.strip():
+            add_note(note)
+            st.success("Saved on this device.")
+        notes = get_notes()
+        if notes:
+            st.divider()
+            for item in notes:
+                note_col, delete_col = st.columns([5, 1], vertical_alignment="center")
+                note_col.caption(item["content"])
+                if delete_col.button("?", key=f"delnote_{item['id']}", help="Delete note"):
+                    delete_note(item["id"])
+                    st.rerun()
+
+    with st.expander("Desktop actions", expanded=False):
+        st.caption("Actions run only after you confirm them.")
+        selected_app = st.selectbox("Open an application", list(APP_ALLOWLIST), key="tool_selected_app")
+        if st.button(f"Confirm opening {selected_app}", key="tool_open_app", use_container_width=True):
+            try:
+                st.success(open_application(selected_app))
+            except (ValueError, RuntimeError, OSError) as exc:
+                st.error(str(exc))
+        with st.form("youtube_form"):
+            video_query = st.text_input("Search YouTube for music or videos")
+            open_video = st.form_submit_button("Open YouTube", use_container_width=True)
+        if open_video:
+            try:
+                st.success(open_youtube(video_query))
+            except (ValueError, RuntimeError) as exc:
+                st.error(str(exc))
+
+    st.divider()
+    if st.button("?  New conversation", key="tool_new_conversation", use_container_width=True):
+        st.session_state.conversation_id = new_conversation()
+        st.session_state.documents = {}
+        st.session_state.pending_action = None
+        st.rerun()
+    if st.button("Delete this conversation's history", key="tool_clear_history", use_container_width=True):
+        clear_conversation(st.session_state.conversation_id)
+        st.session_state.pending_action = None
+        st.rerun()
+
+
+submitted = st.chat_input(
+    "How can V-Ask help?",
+    accept_file="multiple",
+    file_type=["pdf", "txt"],
+    max_upload_size=MAX_UPLOAD_MB,
+)
+prompt = ""
+if submitted:
+    uploaded_files = submitted.files if not isinstance(submitted, str) else []
+    prompt = submitted.text.strip() if not isinstance(submitted, str) else submitted.strip()
+    newly_added = []
+    for uploaded in uploaded_files:
+        if uploaded.size > MAX_UPLOAD_MB * 1024 * 1024:
+            st.error(f"{uploaded.name}: exceeds the {MAX_UPLOAD_MB} MB limit.")
+            continue
+        if uploaded.name not in st.session_state.documents:
+            try:
+                st.session_state.documents[uploaded.name] = extract_text(uploaded.name, uploaded.getvalue())
+                newly_added.append(uploaded.name)
+            except ValueError as exc:
+                st.error(f"{uploaded.name}: {exc}")
+    if not prompt and uploaded_files:
+        prompt = "Summarize the uploaded document(s)."
+    if newly_added:
+        st.toast("Attached: " + ", ".join(newly_added))
+
 if prompt:
     st.session_state.pending_action = detect_action(prompt)
     add_message(st.session_state.conversation_id, "user", prompt)
