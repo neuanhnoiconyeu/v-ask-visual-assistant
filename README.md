@@ -1,21 +1,55 @@
-﻿# V-Ask — Vietnamese Personal AI
+# V-Ask — AI Agent & Visual Assistant for Developers
 
-V-Ask is a privacy-conscious personal assistant built with Streamlit, NVIDIA Nemotron, and Nebius Token Factory. Chat history and personal notes are stored locally in SQLite. PDF and TXT documents are extracted and searched locally; only relevant excerpts are sent to Nebius when generating an answer.
+V-Ask is evolving into an AI agent for software development, combining developer-focused assistance with visual analysis to help developers understand code, investigate errors, review changes, and improve testing workflows.
 
-## Project structure
+The application currently runs on Streamlit and uses Nebius Token Factory through its OpenAI-compatible API. **Phase 1 focuses on a text-based developer assistant**: users provide code, errors, and context, and V-Ask responds using the configured model. Project access, file edit proposals, command execution, and image analysis are planned for later phases and are not available in Phase 1.
+
+## Product direction
+
+- **AI agent for developers:** Understand requests and work context, then help with tasks from analysis to actionable recommendations. Actions that affect a project should have a clear scope and require user confirmation.
+- **Visual assistant:** The product is intended to analyze user-provided screenshots, interfaces, diagrams, and error images, and explain issues based on visible evidence.
+- **Controlled assistance:** Today, V-Ask only receives content users provide and attached PDF/TXT documents. It does not read an entire project, edit code files, run arbitrary commands, or integrate with VS Code.
+
+## Current features — Phase 1
+
+- **General chat:** Ask general questions using the configured Nebius model.
+- **Explain Code:** Explain code flow, functions, dependencies, and relevant edge cases.
+- **Debug Assistant:** Analyze code and error messages, identify likely causes, and suggest fixes.
+- **Code Review:** Review code for potential bugs, maintainability, readability, performance, and security risks.
+- **Generate Tests:** Generate tests based on the framework and conventions provided or inferred from available context. The model does not claim that tests were run.
+- **Document context:** Extract PDF/TXT text and search it locally, then send relevant excerpts to the model as context.
+- **Local history and notes:** Store chat history and personal notes in SQLite on the device running V-Ask.
+- **Confirmed desktop actions:** Open allowlisted applications and YouTube search results after user confirmation.
+
+V-Ask does not claim that code was executed or tests passed unless they were actually run. Model responses are suggestions for developers to review.
+
+## Roadmap
+
+This roadmap describes the intended direction; these items are not all implemented.
+
+1. **Phase 1 — Developer assistant:** Four developer modes, text input for code/errors/context, and PDF/TXT documents as model context.
+2. **Phase 2 — Visual assistant:** Accept user-selected screenshots and images; analyze UIs, diagrams, and visible errors, and connect observations to visible regions.
+3. **Phase 3 — Project-aware agent:** Read project files within a user-selected scope, search the codebase, and propose changes as diffs for user review.
+4. **Later phases:** Consider running tests or developer commands with limited scope, clear action previews, and user confirmation before execution.
+
+Project-wide filesystem access, autonomous code editing, arbitrary terminal execution, and a VS Code extension are outside Phase 1.
+
+## Technology and project structure
 
 ```text
 v-ask-visual-assistant/
-├── app.py                 # Streamlit interface and app orchestration
-├── config.py              # Shared configuration
-├── llm_client.py          # OpenAI SDK client for Nebius Token Factory
-├── memory.py              # SQLite chat history and personal notes
-├── rag.py                 # Local PDF/TXT extraction, chunking, and retrieval
-├── desktop_actions.py     # Confirmed app launch and YouTube search actions
-├── assets/                # V-Ask logo assets
-├── .streamlit/config.toml # Streamlit themes and upload settings
+├── app.py                  # Streamlit UI and conversation orchestration
+├── developer_modes.py      # Developer mode instructions and input formatting
+├── llm_client.py           # OpenAI SDK client for Nebius Token Factory
+├── config.py               # Model, upload/context limits, and app configuration
+├── memory.py               # Local SQLite chat history and notes
+├── rag.py                  # Local PDF/TXT extraction, chunking, and retrieval
+├── desktop_actions.py      # User-confirmed, allowlisted desktop actions
+├── test_developer_modes.py # Unit tests for developer mode input formatting
+├── assets/                 # Logo and UI assets
+├── .streamlit/config.toml  # Streamlit theme and upload settings
 ├── requirements.txt
-└── .env.example
+└── .env.example            # Environment variable template; not loaded automatically
 ```
 
 ## Requirements
@@ -24,49 +58,41 @@ v-ask-visual-assistant/
 - A Nebius Token Factory API key
 - A Nemotron model enabled for your Nebius account
 
-## Run locally
+## Run locally on Windows
 
-1. Create and activate a virtual environment, then install dependencies:
+Create a virtual environment and install dependencies:
 
-   ```powershell
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
-   ```
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
-2. Open `.streamlit/secrets.toml` and add your key:
+Create `.streamlit/secrets.toml` and add your API key:
 
-   ```toml
-   NEBIUS_API_KEY = "your-nebius-api-key"
-   ```
+```toml
+NEBIUS_API_KEY = "your-nebius-api-key"
+```
 
-   The file is ignored by Git. Set `NEBIUS_MODEL` as an environment variable if you need a different model ID; the default is configured in `config.py`.
+Start the application:
 
-3. Start the app:
+```powershell
+streamlit run app.py
+```
 
-   ```powershell
-   streamlit run app.py
-   ```
+The default model is `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`. Set `NEBIUS_MODEL` in the environment to use another model enabled for your Nebius account.
 
-The app stores its local database at `data/vask.sqlite3`. Set `VASK_DATA_DIR` to use another local directory. Each installation maintains its own memory.
+## Data and privacy
 
-## Features and privacy
+- Chat history and notes are stored in `data/vask.sqlite3` on the machine running the application. Set `VASK_DATA_DIR` to use a different data directory.
+- PDF/TXT text is extracted and kept in the current session; the RAG module does not write document text to disk. Relevant excerpts are sent to Nebius when generating an answer.
+- Do not upload API keys or sensitive data in code/context. Do not commit secrets to the repository.
+- Retrieved document text is reference material, not instructions for the assistant.
 
-- **Local memory:** Chat history and personal notes are stored in SQLite on the device running V-Ask.
-- **Local document retrieval:** PDF and TXT files are extracted and searched in the current Streamlit session. Document text is not written to disk by the RAG module. Relevant excerpts are sent to Nebius for answers. Long summary requests are limited to the configured context size.
-- **Desktop actions:** Applications must be listed in the allowlist in `desktop_actions.py`. App launches and YouTube searches require an explicit confirmation. YouTube opens search results; it does not automatically start playback.
-- **Themes:** The Streamlit settings menu supports custom Light and Dark themes. The app uses Be Vietnam Pro when Google Fonts is available and falls back to Segoe UI.
+## Tests
 
-## Two-person task assignment
+Run the unit tests for developer mode input formatting:
 
-| Team member | Ownership | Main files |
-|---|---|---|
-| A — AI, memory, and RAG | Nebius client and prompts; SQLite schema and queries; PDF/TXT extraction, chunking, retrieval, and provider error handling. Coordinate through the public interfaces `answer(messages, context)`, `memory.*`, `extract_text()`, and `retrieve()`. | `llm_client.py`, `memory.py`, `rag.py`, `config.py`, `requirements.txt` |
-| B — Product UI and desktop integration | Streamlit interface, uploads, notes and chat display, theme styling, confirmed desktop actions, and setup documentation. Consume member A's public functions without editing their implementation. | `app.py`, `desktop_actions.py`, `.streamlit/`, `README.md`, `.gitignore` |
-
-### Git workflow
-
-- Work on separate branches: `feature/ai-memory-rag` and `feature/streamlit-actions`.
-- Keep UI changes in `app.py` with member B, and storage/retrieval changes in `memory.py` and `rag.py` with member A.
-- Keep public function signatures stable; discuss interface changes before integrating.
-- Commit on feature branches and open pull requests into `main`. Integrate the AI/memory/RAG interfaces before the UI branch depends on them.
+```powershell
+python -m unittest -v test_developer_modes.py
+```
