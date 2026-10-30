@@ -221,3 +221,8 @@ data/
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
+vscode-extension/node_modules/
+vscode-extension/out/
+vscode-extension/*.vsix
+dist/
+vask-service-test*.log

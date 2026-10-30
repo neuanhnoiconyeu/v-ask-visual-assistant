@@ -8,16 +8,21 @@ from pathlib import Path
 
 import streamlit as st
 
-from config import MAX_UPLOAD_MB
+from config import MAX_PROJECT_UPLOAD_MB, MAX_SELECTED_WORKSPACE_CONTEXT_CHARS, MAX_UPLOAD_MB
 from developer_modes import MODE_INSTRUCTIONS, build_developer_request
 from desktop_actions import APP_ALLOWLIST, detect_action, open_application, open_youtube
 from llm_client import answer, request_change_proposal
 from memory import (add_message, add_note, clear_conversation, delete_note,
-                    get_messages, get_notes, initialize, new_conversation)
+                    get_messages, get_notes, get_or_create_mode_conversation,
+                    initialize, new_conversation)
 from patch_applier import (ProposalState, apply_proposal, build_change_proposal,
                            context_file_paths, reject_proposal)
+from project_importer import (ImportedProject, ProjectImportError, import_project_folder,
+                              import_project_zip, list_imported_projects,
+                              remove_imported_project)
 from rag import all_document_context, extract_text, retrieve
-from workspace_reader import WorkspaceError, index_workspace, search_workspace
+from workspace_context import FileTreeNode, build_file_tree, build_workspace_context
+from workspace_reader import WorkspaceError, index_workspace, resolve_workspace
 
 LOGO_PATH = Path(__file__).parent / "assets" / "vask-logo-transparent.png"
 MODE_HINTS = {
@@ -44,19 +49,13 @@ st.markdown("""
   --accent-lime-strong: #d5ff72;
   --border-subtle: rgba(224, 226, 204, .12);
   --border-strong: rgba(224, 226, 204, .22);
-  --success: #c7f464;
-  --danger: #f28b80;
-  --radius-sm: 9px;
-  --radius-md: 14px;
-  --radius-lg: 20px;
-  --shadow-soft: 0 18px 55px rgba(0, 0, 0, .24);
-  --space-1: .35rem;
-  --space-2: .65rem;
-  --space-3: 1rem;
-  --space-4: 1.5rem;
-  --ease-ui: cubic-bezier(.2, .75, .25, 1);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --space-1: .4rem;
+  --space-2: .75rem;
+  --space-3: 1.25rem;
+  --space-4: 2rem;
   --duration-fast: 150ms;
-  --duration-ui: 220ms;
   color-scheme: dark;
 }
 html, body, input, textarea, button, label, p, h1, h2, h3,
@@ -64,14 +63,9 @@ html, body, input, textarea, button, label, p, h1, h2, h3,
 [data-testid="stWidgetLabel"] {
   font-family: Inter, "Segoe UI", system-ui, sans-serif !important;
 }
-html { scroll-behavior: smooth; }
 .stApp {
   color: var(--text-primary) !important;
-  background:
-    radial-gradient(ellipse at 72% 12%, rgba(199, 244, 100, .075), transparent 38%),
-    radial-gradient(ellipse at 0% 80%, rgba(190, 190, 160, .035), transparent 35%),
-    var(--app-bg) !important;
-  background-attachment: fixed !important;
+  background: var(--app-bg) !important;
 }
 [data-testid="stHeader"], header[data-testid="stHeader"], .stAppHeader,
 [data-testid="stToolbar"], [data-testid="stBottom"],
@@ -84,138 +78,142 @@ html { scroll-behavior: smooth; }
 [data-testid="stAppViewContainer"] { background: transparent !important; }
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stDeployButton"] { background: transparent !important; }
-.block-container { max-width: 1240px; padding: 3.1rem 2.4rem 12rem; scroll-padding-bottom: 12rem; }
+.block-container { max-width: 1120px; padding: 2.25rem 2.5rem 11rem; scroll-padding-bottom: 11rem; }
 [data-testid="stSidebar"] {
-  background: linear-gradient(180deg, #11120e 0%, var(--sidebar-bg) 70%) !important;
+  background: var(--sidebar-bg) !important;
   border-right: 1px solid var(--border-subtle);
 }
-[data-testid="stSidebar"] > div:first-child { padding: 1.35rem 1rem 1.5rem; }
+[data-testid="stSidebar"] > div:first-child { padding: 1.15rem .9rem 1.5rem; }
 [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
-  color: var(--text-primary); font-weight: 650; letter-spacing: -.025em;
+  color: var(--text-primary); font-weight: 650; letter-spacing: -.02em;
 }
-[data-testid="stSidebar"] hr { border-color: var(--border-subtle); margin: 1.05rem 0; }
+[data-testid="stSidebar"] hr { border-color: var(--border-subtle); margin: 1rem 0; }
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] { color: var(--text-muted); }
 [data-testid="stSidebar"] [data-testid="stExpander"] {
-  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-  background: rgba(255,255,255,.018); overflow: hidden;
+  border: 0; border-top: 1px solid var(--border-subtle); border-radius: 0;
+  background: transparent; overflow: visible;
 }
 [data-testid="stSidebar"] [data-testid="stExpander"] summary {
-  color: var(--text-primary); font-weight: 600;
+  color: var(--text-primary); font-weight: 620; padding: .7rem 0;
 }
 [data-testid="stSidebar"] [data-testid="stImage"] img {
-  object-fit: contain; border-radius: 10px;
+  object-fit: contain; border-radius: var(--radius-sm);
 }
 [data-testid="stSidebar"] [data-testid="stButton"] > button {
-  min-height: 2.45rem; border-radius: 11px; text-align: left;
+  min-height: 2.35rem; border-radius: var(--radius-sm); text-align: left;
   white-space: normal; line-height: 1.35;
 }
-.st-key-vask-sidebar-brand { padding: .35rem .15rem .85rem; border-bottom: 1px solid var(--border-subtle); margin-bottom: .75rem; }
-.vask-brand-name { color: var(--text-primary); font-size: 1.02rem; font-weight: 720; letter-spacing: -.04em; }
+.st-key-vask-sidebar-brand { padding: .2rem .15rem .8rem; border-bottom: 1px solid var(--border-subtle); margin-bottom: .65rem; }
+.vask-brand-name { color: var(--text-primary); font-size: 1rem; font-weight: 700; letter-spacing: -.035em; }
 .vask-brand-caption { color: var(--text-muted); font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; }
-.vask-side-label { color: var(--text-muted); font-size: .68rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; margin: .3rem 0 .55rem; }
+.vask-side-label { color: var(--text-muted); font-size: .67rem; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; margin: 1.2rem 0 .4rem; text-align: center; }
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+  display: flex; justify-content: center; text-align: center;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary > *:first-child {
+  margin-left: auto; margin-right: auto;
+}
+[data-testid="stSidebar"] [data-testid="stButton"] > button,
+[data-testid="stSidebar"] [data-testid="stFormSubmitButton"] > button {
+  justify-content: center; text-align: center;
+}
 .vask-current-workspace {
-  display: flex; gap: .55rem; align-items: flex-start; padding: .7rem .75rem;
-  border: 1px solid rgba(199,244,100,.2); border-radius: var(--radius-sm);
-  background: rgba(199,244,100,.045); color: var(--text-secondary); font-size: .78rem;
+  display: flex; gap: .5rem; align-items: flex-start; padding: .6rem 0;
+  border: 0; border-left: 2px solid var(--accent-lime);
+  background: transparent; color: var(--text-secondary); font-size: .78rem;
   overflow-wrap: anywhere;
 }
-.vask-current-workspace strong { color: var(--text-primary); font-weight: 600; }
+.vask-current-workspace > * { margin-left: .65rem; }
+.vask-current-workspace strong { color: var(--text-primary); font-weight: 620; }
 .vask-current-workspace code { color: var(--text-secondary); overflow-wrap: anywhere; white-space: normal; }
 .vask-page-header {
   display: flex; justify-content: space-between; align-items: center; gap: 1rem;
-  padding: .15rem 0 1rem; border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.3rem;
+  padding: 0 0 .85rem; border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.5rem;
 }
 .vask-page-eyebrow { color: var(--text-muted); font-size: .72rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
 .vask-page-status { color: var(--text-secondary); font-size: .78rem; }
 .vask-page-status span { color: var(--accent-lime); }
-.welcome-shell { position: relative; margin: 1.5rem 0 1rem; padding: 1.5rem 1.2rem; overflow: hidden; }
-.welcome-shell.welcome-enter .welcome-copy, .welcome-shell.welcome-enter .welcome-kicker,
-.welcome-shell.welcome-enter .welcome-title { animation: welcome-in 560ms var(--ease-ui) both; }
+.welcome-shell { max-width: 620px; margin: 0; padding: 0; }
 .welcome-kicker { color: var(--accent-lime); font-size: .7rem; font-weight: 700; letter-spacing: .17em; text-transform: uppercase; }
-.welcome-title { max-width: 650px; margin: .95rem 0 1rem; color: var(--text-primary); font-size: clamp(2.5rem, 5.1vw, 4.7rem); font-weight: 690; letter-spacing: -.07em; line-height: .99; }
-.welcome-copy { max-width: 510px; margin: 0; color: var(--text-secondary); font-size: 1rem; line-height: 1.75; }
-.welcome-note { margin-top: 1.7rem; color: var(--text-muted); font-size: .74rem; letter-spacing: .015em; }
-.welcome-status { display: flex; align-items: center; gap: .55rem; margin-top: 1.4rem; color: var(--text-muted); font-size: .72rem; }
-.welcome-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-lime); box-shadow: 0 0 12px rgba(199,244,100,.48); }
-.welcome-orbit { display: grid; place-items: center; min-height: 350px; }
-.orbit-stage { position: relative; display: grid; place-items: center; width: min(100%, 300px); aspect-ratio: 1; isolation: isolate; }
-.orbit-stage::before { content: ""; position: absolute; inset: 18%; z-index: -1; border-radius: 50%; background: radial-gradient(circle, rgba(199,244,100,.15), rgba(199,244,100,.035) 48%, transparent 72%); filter: blur(14px); animation: orbit-glow 8s ease-in-out infinite alternate; }
-.orbit-track { position: absolute; border: 1px solid rgba(222,226,201,.13); border-radius: 50%; animation: orbit-spin linear infinite; }
-.orbit-track::after { content: ""; position: absolute; top: 50%; left: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-lime); box-shadow: 0 0 14px rgba(199,244,100,.7); }
-.orbit-track--outer { inset: 4%; animation-duration: 48s; }
-.orbit-track--middle { inset: 16%; border-style: dashed; border-color: rgba(222,226,201,.18); animation-duration: 36s; animation-direction: reverse; }
-.orbit-track--inner { inset: 28%; animation-duration: 27s; }
-.orbit-track--outer::after { top: 17%; left: 85%; width: 5px; height: 5px; background: #f3f1e8; }
-.orbit-track--middle::after { top: 75%; left: 14%; width: 6px; height: 6px; }
-.orbit-core { display: grid; place-items: center; width: 30%; aspect-ratio: 1; border: 1px solid rgba(199,244,100,.38); border-radius: 50%; background: linear-gradient(145deg, rgba(35,38,26,.94), rgba(16,18,13,.96)); box-shadow: 0 0 70px rgba(199,244,100,.13), inset 0 0 28px rgba(199,244,100,.08); }
-.orbit-core img { width: 62%; height: auto; object-fit: contain; filter: drop-shadow(0 0 16px rgba(199,244,100,.15)); }
-.orbit-label { position: absolute; padding: .34rem .55rem; border: 1px solid var(--border-subtle); border-radius: 99px; background: rgba(16,17,13,.84); color: var(--text-secondary); font-size: .58rem; font-weight: 650; letter-spacing: .12em; }
-.orbit-label--top { top: 19%; right: 1%; }
-.orbit-label--bottom { bottom: 11%; left: 3%; }
-.quick-action-title { margin: 1.1rem 0 .65rem; color: var(--text-muted); font-size: .68rem; font-weight: 700; letter-spacing: .13em; text-align: left; text-transform: uppercase; }
-.mode-caption { color: var(--text-muted); font-size: .74rem; }
+.welcome-title { max-width: 680px; margin: .8rem 0 1rem; color: var(--text-primary); font-size: clamp(2.35rem, 5vw, 4.2rem); font-weight: 680; letter-spacing: -.065em; line-height: 1.02; }
+.welcome-copy { max-width: 600px; margin: 0; color: var(--text-secondary); font-size: 1rem; line-height: 1.7; }
+.welcome-note { margin-top: 1.4rem; color: var(--text-muted); font-size: .78rem; }
+.welcome-status { display: flex; align-items: center; gap: .5rem; margin-top: 1.25rem; color: var(--text-secondary); font-size: .78rem; }
+.welcome-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-lime); }
+.vask-welcome-logo { width: min(100%, 250px); margin: 0 auto; position: relative; overflow: hidden; }
+.vask-welcome-logo img { display: block; width: 100%; height: auto; }
+.vask-welcome-logo.logo-intro img { animation: logo-reveal 1.65s ease-out both; }
+.vask-welcome-logo.logo-intro::after {
+  content: ""; position: absolute; inset: 0 auto 0 -42%; width: 30%;
+  background: linear-gradient(100deg, transparent, rgba(222, 188, 97, .72), transparent);
+  mix-blend-mode: screen; transform: skewX(-18deg); animation: logo-sweep .55s ease-out .9s both;
+  pointer-events: none;
+}
+.st-key-welcome-logo-actions { width: min(100%, 250px); margin: 1rem auto 0; }
+.st-key-welcome-logo-actions [data-testid="stButton"] > button { justify-content: center; }
+.mode-caption { color: var(--text-muted); font-size: .76rem; }
 [data-testid="stSegmentedControl"] {
-  padding: .28rem; border: 1px solid var(--border-subtle); border-radius: 13px;
-  background: rgba(21,22,17,.88); gap: .2rem;
+  padding: .2rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+  background: var(--surface-1); gap: .15rem;
 }
 [data-testid="stSegmentedControl"] button {
-  min-height: 2.45rem; padding: .45rem .7rem; border-radius: 9px !important;
-  color: var(--text-secondary); transition: color var(--duration-fast) var(--ease-ui), background var(--duration-fast) var(--ease-ui), transform var(--duration-fast) var(--ease-ui);
+  min-height: 2.25rem; padding: .4rem .65rem; border-radius: 5px !important;
+  color: var(--text-secondary); transition: color var(--duration-fast), background var(--duration-fast);
 }
 [data-testid="stSegmentedControl"] button[aria-pressed="true"],
 [data-testid="stSegmentedControl"] button[aria-checked="true"] {
-  color: var(--accent-lime-strong); background: rgba(199,244,100,.1); box-shadow: inset 0 0 0 1px rgba(199,244,100,.26);
+  color: var(--accent-lime-strong); background: rgba(199,244,100,.1); box-shadow: inset 0 0 0 1px rgba(199,244,100,.22);
 }
 [data-testid="stChatMessage"] {
-  padding: 1rem 1.15rem; margin: .7rem 0; border: 1px solid var(--border-subtle);
-  border-radius: 16px; background: rgba(21,22,17,.7);
+  max-width: 860px; margin: .8rem auto; padding: 1.1rem 0;
+  border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; background: transparent;
 }
-[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] { line-height: 1.72; }
+[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] { line-height: 1.7; max-width: 780px; }
 [data-testid="stChatMessage"] h1, [data-testid="stChatMessage"] h2, [data-testid="stChatMessage"] h3 { letter-spacing: -.035em; }
 [data-testid="stChatMessage"] a { color: var(--accent-lime-strong); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 [data-testid="stChatMessage"] pre, [data-testid="stCode"] pre {
   max-width: 100%; overflow-x: auto; border: 1px solid var(--border-subtle) !important;
-  border-radius: 12px !important; background: #0d0e0b !important;
+  border-radius: var(--radius-sm) !important; background: #0d0e0b !important;
 }
 [data-testid="stChatMessage"] code, [data-testid="stCode"] code {
   font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace !important;
   font-size: .88em; font-variant-ligatures: none;
 }
 [data-testid="stChatMessage"] :not(pre) > code {
-  padding: .15em .38em; border: 1px solid var(--border-subtle); border-radius: 5px;
+  padding: .13em .35em; border: 1px solid var(--border-subtle); border-radius: 4px;
   color: #d8f3a0; background: rgba(199,244,100,.08);
 }
 [data-testid="stChatInput"] {
-  border: 1px solid var(--border-strong); border-radius: 18px;
-  background: rgba(20,21,16,.97); box-shadow: 0 14px 45px rgba(0,0,0,.28);
-  transition: border-color var(--duration-ui) var(--ease-ui), box-shadow var(--duration-ui) var(--ease-ui);
+  max-width: 860px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  background: var(--surface-1); box-shadow: 0 -10px 24px rgba(0,0,0,.12);
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
 [data-testid="stChatInput"]:focus-within {
-  border-color: rgba(199,244,100,.62); box-shadow: 0 0 0 3px rgba(199,244,100,.09), 0 14px 45px rgba(0,0,0,.28);
+  border-color: rgba(199,244,100,.62); box-shadow: 0 0 0 3px rgba(199,244,100,.08);
 }
 [data-testid="stChatInput"] textarea { color: var(--text-primary); line-height: 1.55; }
 [data-testid="stTextArea"] textarea, [data-testid="stTextInput"] input {
-  border: 1px solid var(--border-subtle); border-radius: 11px; background: rgba(12,13,10,.82);
-  color: var(--text-primary); transition: border-color var(--duration-fast) var(--ease-ui), box-shadow var(--duration-fast) var(--ease-ui);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: #0d0e0b;
+  color: var(--text-primary); transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
 [data-testid="stTextArea"] textarea:focus, [data-testid="stTextInput"] input:focus {
   border-color: rgba(199,244,100,.62); box-shadow: 0 0 0 3px rgba(199,244,100,.09);
 }
-[data-testid="stSelectbox"] [data-baseweb="select"] > div { border-color: var(--border-subtle); border-radius: 11px; background: var(--surface-1); }
-[data-testid="stFileUploader"] section { border: 1px dashed rgba(199,244,100,.35); border-radius: 13px; background: rgba(199,244,100,.025); }
-[data-testid="stExpander"] { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: rgba(21,22,17,.48); overflow: hidden; }
+[data-testid="stSelectbox"] [data-baseweb="select"] > div { border-color: var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-1); }
+[data-testid="stFileUploader"] section { border: 1px dashed rgba(199,244,100,.32); border-radius: var(--radius-sm); background: transparent; }
+[data-testid="stExpander"] { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-1); overflow: hidden; }
 [data-testid="stExpander"] summary { color: var(--text-primary); font-weight: 600; }
 [data-testid="stTabs"] [role="tablist"] { gap: .35rem; overflow-x: auto; }
-[data-testid="stTabs"] button[role="tab"] { color: var(--text-secondary); border-radius: 9px 9px 0 0; }
+[data-testid="stTabs"] button[role="tab"] { color: var(--text-secondary); border-radius: 4px 4px 0 0; }
 [data-testid="stTabs"] button[role="tab"][aria-selected="true"] { color: var(--accent-lime-strong); }
-[data-testid="stAlert"] { border-radius: var(--radius-md); }
+[data-testid="stAlert"] { border-radius: var(--radius-sm); }
 [data-testid="stButton"] > button, [data-testid="stFormSubmitButton"] > button {
-  min-height: 2.55rem; border: 1px solid var(--border-subtle); border-radius: 11px;
-  color: var(--text-primary); background: rgba(26,27,21,.82); font-weight: 590;
-  transition: border-color var(--duration-fast) var(--ease-ui), background var(--duration-fast) var(--ease-ui), transform var(--duration-fast) var(--ease-ui), box-shadow var(--duration-fast) var(--ease-ui);
+  min-height: 2.35rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+  color: var(--text-primary); background: var(--surface-2); font-weight: 590;
+  transition: border-color var(--duration-fast), background var(--duration-fast);
 }
 [data-testid="stButton"] > button:hover, [data-testid="stFormSubmitButton"] > button:hover {
-  border-color: rgba(199,244,100,.4); background: rgba(199,244,100,.08); transform: translateY(-1px);
+  border-color: rgba(199,244,100,.4); background: rgba(199,244,100,.08);
 }
 [data-testid="stFormSubmitButton"] > button[kind="primary"], [data-testid="stButton"] > button[kind="primary"] { border-color: rgba(199,244,100,.48); color: #15180d; background: var(--accent-lime); font-weight: 700; }
 [data-testid="stFormSubmitButton"] > button[kind="primary"]:hover, [data-testid="stButton"] > button[kind="primary"]:hover { border-color: var(--accent-lime-strong); background: var(--accent-lime-strong); }
@@ -224,56 +222,76 @@ html { scroll-behavior: smooth; }
   outline: 2px solid rgba(199,244,100,.8); outline-offset: 2px;
 }
 [data-testid="stButton"] > button:disabled, [data-testid="stFormSubmitButton"] > button:disabled {
-  opacity: .48; cursor: not-allowed; transform: none;
+  opacity: .48; cursor: not-allowed;
 }
-[data-testid="stDialog"] [role="dialog"] { border: 1px solid var(--border-strong); border-radius: 20px; background: var(--surface-1); box-shadow: var(--shadow-soft); }
+[data-testid="stDialog"] [role="dialog"] { border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); }
 .st-key-danger-zone [data-testid="stButton"] > button { color: #f2a1aa; border-color: rgba(244,125,140,.2); background: rgba(244,125,140,.045); }
 .st-key-danger-zone [data-testid="stButton"] > button:hover { border-color: rgba(244,125,140,.52); background: rgba(244,125,140,.1); }
-[class*="st-key-quick-action-"] button { text-align: left; justify-content: flex-start; min-height: 3.1rem; }
-[class*="st-key-quick-action-"] button:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(199,244,100,.08); }
+.st-key-tool-new-conversation [data-testid="stButton"] > button,
+.st-key-danger-zone [data-testid="stButton"] > button {
+  justify-content: center; text-align: center;
+}
 [data-testid="stBottomBlockContainer"] { border-top: 1px solid rgba(224,226,204,.06) !important; }
-@keyframes welcome-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes orbit-spin { to { transform: rotate(360deg); } }
-@keyframes orbit-glow { from { opacity: .55; transform: scale(.92); } to { opacity: 1; transform: scale(1.08); } }
+@keyframes logo-reveal {
+  0% { opacity: 0; clip-path: inset(0 0 100% 0); }
+  42% { opacity: 1; clip-path: inset(0 0 34% 0); }
+  100% { opacity: 1; clip-path: inset(0); }
+}
+@keyframes logo-sweep { from { transform: translateX(0) skewX(-18deg); opacity: 0; } 20% { opacity: 1; } to { transform: translateX(520%) skewX(-18deg); opacity: 0; } }
 @media (max-width: 760px) {
   html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
     max-width: 100vw !important; overflow-x: hidden !important;
   }
   .block-container {
     width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;
-    padding: 1.25rem .85rem 13rem !important; scroll-padding-bottom: 13rem;
+    padding: 1.25rem .85rem 12rem !important; scroll-padding-bottom: 12rem;
   }
   [data-testid="stMainBlockContainer"], [data-testid="stVerticalBlock"],
   [data-testid="stHorizontalBlock"], [data-testid="stColumn"] { min-width: 0 !important; }
   [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
   [data-testid="stColumn"] { flex: 1 1 100% !important; width: 100% !important; }
-  .welcome-shell { width: 100%; box-sizing: border-box; margin: .2rem auto .25rem; padding: 1.2rem .2rem; }
+  .welcome-shell { width: 100%; box-sizing: border-box; margin: .5rem 0 .25rem; padding: 0; }
   .welcome-title { font-size: clamp(2.35rem, 11vw, 3.4rem); overflow-wrap: anywhere; }
   .welcome-copy { font-size: .9rem; }
-  .welcome-orbit { min-height: 230px; }
-  .orbit-stage { width: min(100%, 250px); }
-  .orbit-label { font-size: .52rem; }
+  .vask-welcome-logo { width: 170px; margin: 1.25rem auto .5rem; }
   [data-testid="stSegmentedControl"] { width: 100%; box-sizing: border-box; flex-wrap: wrap; }
   [data-testid="stSegmentedControl"] > div { width: 100%; max-width: 100%; min-width: 0; flex-wrap: wrap; }
   [data-testid="stSegmentedControl"] button { flex: 1 1 42%; width: auto; min-width: 0; white-space: normal; line-height: 1.25; }
   [data-testid="stChatInput"] { width: 100%; box-sizing: border-box; }
-  [data-testid="stChatMessage"] { padding: .85rem; }
+  [data-testid="stChatMessage"] { padding: .9rem 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 </style>
 """, unsafe_allow_html=True)
 initialize()
 
-if "conversation_id" not in st.session_state:
-    st.session_state.conversation_id = new_conversation()
+if "mode_conversation_ids" not in st.session_state:
+    legacy_conversation_id = st.session_state.get("conversation_id")
+    st.session_state.mode_conversation_ids = {
+        mode: (
+            legacy_conversation_id
+            if mode == "General chat" and legacy_conversation_id
+            else get_or_create_mode_conversation(mode)
+        )
+        for mode in MODE_INSTRUCTIONS
+    }
 if "documents" not in st.session_state:
     st.session_state.documents = {}
+if "mode_documents" not in st.session_state:
+    st.session_state.mode_documents = {
+        mode: (dict(st.session_state.documents) if mode == "General chat" else {})
+        for mode in MODE_INSTRUCTIONS
+    }
 if "pending_action" not in st.session_state:
     st.session_state.pending_action = None
 if "workspace_index" not in st.session_state:
     st.session_state.workspace_index = None
+if "active_imported_project_id" not in st.session_state:
+    st.session_state.active_imported_project_id = None
+if "project_import_open" not in st.session_state:
+    st.session_state.project_import_open = False
 if "change_proposal" not in st.session_state:
     st.session_state.change_proposal = None
 if "generate_change_request" not in st.session_state:
@@ -286,15 +304,69 @@ if "quick_action_notice" not in st.session_state:
     st.session_state.quick_action_notice = ""
 if "assistant_mode" not in st.session_state:
     st.session_state.assistant_mode = "General chat"
-if "welcome_animation_played" not in st.session_state:
-    st.session_state.welcome_animation_played = False
+if "active_workspace_mode" not in st.session_state:
+    st.session_state.active_workspace_mode = st.session_state.assistant_mode
+if "logo_intro_played" not in st.session_state:
+    st.session_state.logo_intro_played = False
+
+
+def _active_conversation_id() -> str:
+    mode = st.session_state.assistant_mode
+    conversation_ids = st.session_state.mode_conversation_ids
+    if mode not in conversation_ids:
+        conversation_ids[mode] = get_or_create_mode_conversation(mode)
+    return conversation_ids[mode]
+
+
+def switch_assistant_workspace() -> None:
+    """Persist the current mode-local UI state before restoring the selected mode."""
+    previous_mode = st.session_state.active_workspace_mode
+    selected_mode = st.session_state.assistant_mode
+    if previous_mode == selected_mode:
+        return
+    st.session_state.mode_documents[previous_mode] = st.session_state.documents
+    st.session_state.documents = st.session_state.mode_documents.setdefault(selected_mode, {})
+    st.session_state.pending_action = None
+    _active_conversation_id()
+    st.session_state.active_workspace_mode = selected_mode
+
+
+def select_assistant_workspace(target_mode: str, action_title: str = "") -> None:
+    """Select a mode from a callback before its segmented-control widget is built."""
+    st.session_state.assistant_mode = target_mode
+    switch_assistant_workspace()
+    if target_mode == "General chat":
+        st.session_state.quick_action_notice = (
+            "Project context is active for your next question."
+            if st.session_state.workspace_index
+            else "Index a project in the sidebar to add code context to your questions."
+        )
+    elif action_title:
+        st.session_state.quick_action_notice = f"{action_title} selected. Add your code and context below."
+
+
+def open_project_import() -> None:
+    """Open the managed project-import controls from the welcome action."""
+    select_assistant_workspace("General chat", "Explore project")
+    st.session_state.project_import_open = True
+if "workspace_selected_files" not in st.session_state:
+    st.session_state.workspace_selected_files = set()
+if "workspace_expanded_dirs" not in st.session_state:
+    st.session_state.workspace_expanded_dirs = set()
+if "workspace_selection_root" not in st.session_state:
+    st.session_state.workspace_selection_root = None
+if "workspace_file_filter" not in st.session_state:
+    st.session_state.workspace_file_filter = ""
+if "workspace_file_widget_keys" not in st.session_state:
+    st.session_state.workspace_file_widget_keys = {}
 
 
 def start_new_conversation_action() -> None:
-    st.session_state.conversation_id = new_conversation()
+    mode = st.session_state.assistant_mode
+    st.session_state.mode_conversation_ids[mode] = new_conversation(mode)
     st.session_state.documents = {}
+    st.session_state.mode_documents[mode] = st.session_state.documents
     st.session_state.pending_action = None
-    st.session_state.assistant_mode = "General chat"
     st.session_state.quick_action_notice = ""
     st.session_state.generate_change_request = ""
     proposal = st.session_state.change_proposal
@@ -303,13 +375,148 @@ def start_new_conversation_action() -> None:
     st.session_state.change_proposal = None
 
 
-def explore_project_action() -> None:
-    st.session_state.assistant_mode = "General chat"
-    st.session_state.quick_action_notice = (
-        "Project context is ready for your next question."
-        if st.session_state.workspace_index
-        else "Index a project in the sidebar to add code context to your questions."
+def _workspace_file_widget_key(root: Path, relative_path: str) -> str:
+    digest = hashlib.sha256(f"{root}\0{relative_path}".encode("utf-8")).hexdigest()[:16]
+    return f"workspace_context_file_{digest}"
+
+
+def _set_workspace_selection(root: Path, indexed_paths: set[str]) -> None:
+    """Keep still-valid selections on refresh and reset widget state for removed files."""
+    old_root = st.session_state.workspace_selection_root
+    old_selection = set(st.session_state.workspace_selected_files)
+    if old_root != str(root):
+        old_selection.clear()
+        st.session_state.workspace_expanded_dirs = set()
+        st.session_state.workspace_file_filter = ""
+        for key in st.session_state.workspace_file_widget_keys.values():
+            st.session_state[key] = False
+        st.session_state.workspace_file_widget_keys = {}
+    else:
+        old_selection.intersection_update(indexed_paths)
+        removed_paths = []
+        for path, key in st.session_state.workspace_file_widget_keys.items():
+            if path not in indexed_paths:
+                st.session_state[key] = False
+                removed_paths.append(path)
+        for path in removed_paths:
+            st.session_state.workspace_file_widget_keys.pop(path, None)
+    st.session_state.workspace_selection_root = str(root)
+    st.session_state.workspace_selected_files = old_selection
+
+
+def clear_workspace_selection() -> None:
+    for key in st.session_state.workspace_file_widget_keys.values():
+        st.session_state[key] = False
+    st.session_state.workspace_selected_files = set()
+
+
+def update_workspace_file_selection(relative_path: str, widget_key: str) -> None:
+    selected = set(st.session_state.workspace_selected_files)
+    if st.session_state.get(widget_key, False):
+        selected.add(relative_path)
+    else:
+        selected.discard(relative_path)
+    st.session_state.workspace_selected_files = selected
+
+
+def toggle_workspace_directory(relative_path: str) -> None:
+    expanded = set(st.session_state.workspace_expanded_dirs)
+    if relative_path in expanded:
+        expanded.remove(relative_path)
+    else:
+        expanded.add(relative_path)
+    st.session_state.workspace_expanded_dirs = expanded
+
+
+def clear_workspace_index() -> None:
+    st.session_state.workspace_index = None
+    st.session_state.workspace_selection_root = None
+    st.session_state.workspace_selected_files = set()
+    st.session_state.workspace_expanded_dirs = set()
+    st.session_state.workspace_file_filter = ""
+    for key in st.session_state.workspace_file_widget_keys.values():
+        st.session_state[key] = False
+    st.session_state.workspace_file_widget_keys = {}
+
+
+def activate_imported_project(project: ImportedProject) -> None:
+    """Index a managed import and preserve only selections valid for its root."""
+    workspace_index = index_workspace(project.root)
+    _set_workspace_selection(
+        workspace_index.root,
+        {file.relative_path for file in workspace_index.files},
     )
+    st.session_state.workspace_index = workspace_index
+    st.session_state.active_imported_project_id = project.project_id
+    st.session_state.workspace_refresh_warning = ""
+
+
+def render_workspace_tree(
+    node: FileTreeNode,
+    root: Path,
+    *,
+    parent: str = "",
+    query: str = "",
+    depth: int = 0,
+    visible: list[int] | None = None,
+    limit: int = 240,
+) -> bool:
+    """Render an expandable, bounded tree using native Streamlit controls."""
+    if visible is None:
+        visible = [0]
+    query = query.casefold().strip()
+    expanded = st.session_state.workspace_expanded_dirs
+    stopped = False
+    for directory, child in sorted(node.directories.items()):
+        relative_dir = f"{parent}/{directory}".strip("/")
+        if query and not any(query in path.casefold() for path in _tree_paths(child)):
+            continue
+        if visible[0] >= limit:
+            return True
+        is_expanded = query != "" or relative_dir in expanded
+        label = ("　" * min(depth, 5)) + ("▾ " if is_expanded else "› ") + directory
+        st.button(
+            label,
+            key="workspace_dir_" + hashlib.sha256(relative_dir.encode("utf-8")).hexdigest()[:14],
+            help=f"{'Collapse' if is_expanded else 'Expand'} {relative_dir}",
+            on_click=toggle_workspace_directory,
+            args=(relative_dir,),
+            disabled=bool(query),
+            use_container_width=True,
+        )
+        visible[0] += 1
+        if is_expanded:
+            stopped = render_workspace_tree(
+                child, root, parent=relative_dir, query=query, depth=depth + 1,
+                visible=visible, limit=limit,
+            )
+            if stopped:
+                return True
+    for relative_path in sorted(node.files):
+        if query and query not in relative_path.casefold():
+            continue
+        if visible[0] >= limit:
+            return True
+        widget_key = _workspace_file_widget_key(root, relative_path)
+        st.session_state.workspace_file_widget_keys[relative_path] = widget_key
+        if widget_key not in st.session_state:
+            st.session_state[widget_key] = relative_path in st.session_state.workspace_selected_files
+        st.checkbox(
+            ("　" * min(depth, 5)) + Path(relative_path).name,
+            key=widget_key,
+            help=relative_path,
+            on_change=update_workspace_file_selection,
+            args=(relative_path, widget_key),
+        )
+        visible[0] += 1
+    return stopped
+
+
+def _tree_paths(node: FileTreeNode) -> list[str]:
+    paths = list(node.files)
+    for child in node.directories.values():
+        paths.extend(_tree_paths(child))
+    return paths
 
 
 with st.sidebar:
@@ -325,31 +532,75 @@ with st.sidebar:
         st.rerun()
 
     st.markdown('<div class="vask-side-label">Project context</div>', unsafe_allow_html=True)
-    with st.expander("Project workspace", expanded=False, icon=":material/folder_open:"):
-        st.caption("Choose a local project and V-Ask will retrieve limited, relevant excerpts for model requests.")
-        st.text_input(
-            "Local project directory",
-            key="workspace_path_input",
-            placeholder=r"C:\Projects\my-app",
-            help="Enter the local project directory path on the machine running V-Ask.",
-        )
-        index_col, clear_col = st.columns(2)
-        if index_col.button("Index / refresh", key="workspace_index_button", icon=":material/refresh:", use_container_width=True):
-            try:
-                if not st.session_state.workspace_path_input.strip():
-                    st.error("Enter a project directory path first.")
-                else:
-                    st.session_state.workspace_index = index_workspace(
-                        st.session_state.workspace_path_input
-                    )
-                    st.session_state.workspace_refresh_warning = ""
-                    st.success("Workspace indexed in this session.")
-            except WorkspaceError as exc:
-                st.error(str(exc))
-            except Exception:
-                st.error("The selected workspace could not be indexed.")
-        if clear_col.button("Clear", key="workspace_clear_button", icon=":material/close:", use_container_width=True):
-            st.session_state.workspace_index = None
+    with st.expander(
+        "Project workspace", expanded=st.session_state.project_import_open,
+        icon=":material/folder_open:",
+    ):
+        st.caption("Import a project into V-Ask's managed workspace. Only bounded, safe text files are indexed and sent as relevant excerpts.")
+        folder_tab, zip_tab = st.tabs(["Upload folder", "Upload ZIP"])
+        with folder_tab:
+            st.caption("Supported in this Streamlit version. Folder structure is retained from the browser upload.")
+            folder_files = st.file_uploader(
+                "Choose project folder", accept_multiple_files="directory",
+                key="project_folder_upload", max_upload_size=MAX_PROJECT_UPLOAD_MB,
+            )
+            if st.button("Import folder", key="import_project_folder", icon=":material/folder_zip:", use_container_width=True):
+                try:
+                    with st.spinner("Validating and importing project files..."):
+                        project = import_project_folder(
+                            [(item.name, item.getvalue()) for item in (folder_files or [])],
+                            name=(folder_files[0].name.split("/")[0] if folder_files else "Uploaded project"),
+                        )
+                        activate_imported_project(project)
+                    st.success(f"Imported {project.imported_files:,} safe project files.")
+                except ProjectImportError as exc:
+                    st.error(str(exc))
+                except Exception:
+                    st.error("The uploaded folder could not be imported safely.")
+        with zip_tab:
+            st.caption("Use a ZIP archive when folder upload is unavailable in your browser.")
+            zip_file = st.file_uploader(
+                "Choose ZIP archive", type=["zip"], key="project_zip_upload",
+                max_upload_size=MAX_PROJECT_UPLOAD_MB,
+            )
+            if st.button("Import ZIP", key="import_project_zip", icon=":material/archive:", use_container_width=True):
+                try:
+                    with st.spinner("Validating and extracting ZIP archive..."):
+                        if zip_file is None:
+                            raise ProjectImportError("Choose a ZIP archive first.")
+                        project = import_project_zip(zip_file.name, zip_file.getvalue())
+                        activate_imported_project(project)
+                    st.success(f"Imported {project.imported_files:,} safe project files.")
+                except ProjectImportError as exc:
+                    st.error(str(exc))
+                except Exception:
+                    st.error("The ZIP archive could not be imported safely.")
+
+        imported_projects = list_imported_projects()
+        imported_by_id = {project.project_id: project for project in imported_projects}
+        if imported_projects:
+            selected_import_id = st.selectbox(
+                "Previously imported projects", options=list(imported_by_id),
+                format_func=lambda project_id: f"{imported_by_id[project_id].name} · {imported_by_id[project_id].imported_files:,} files",
+                key="imported_project_picker",
+            )
+            reopen_col, remove_col = st.columns(2)
+            if reopen_col.button("Open import", key="open_imported_project", icon=":material/folder_open:", use_container_width=True):
+                try:
+                    activate_imported_project(imported_by_id[selected_import_id])
+                    st.success("Imported project indexed in this session.")
+                except (ProjectImportError, WorkspaceError):
+                    st.error("This imported project is unavailable.")
+            if remove_col.button("Remove import", key="remove_imported_project", icon=":material/delete_outline:", use_container_width=True):
+                try:
+                    if st.session_state.active_imported_project_id == selected_import_id:
+                        clear_workspace_index()
+                        st.session_state.active_imported_project_id = None
+                    remove_imported_project(selected_import_id)
+                    st.success("Imported project removed from V-Ask storage.")
+                    st.rerun()
+                except ProjectImportError as exc:
+                    st.error(str(exc))
         active_workspace = st.session_state.workspace_index
         if st.session_state.workspace_refresh_warning:
             st.warning(st.session_state.workspace_refresh_warning)
@@ -370,7 +621,7 @@ with st.sidebar:
             if active_workspace.truncated:
                 st.caption("Index limits were reached; refresh with a smaller workspace for broader coverage.")
         else:
-            st.info("No project selected yet. Index a local folder to ask questions about its code.")
+            st.info("Upload a project folder or ZIP archive to ask questions about its code.")
 
         st.markdown("**Propose changes**")
         st.caption("Relevant excerpts are sent to Nebius. Project files stay untouched until you review and apply a diff.")
@@ -391,6 +642,65 @@ with st.sidebar:
                 st.error("Review or reject the current proposal before generating another.")
             else:
                 st.session_state.generate_change_request = requested_change.strip()
+
+    active_workspace = st.session_state.workspace_index
+    with st.expander(
+        f"Project Explorer · {len(st.session_state.workspace_selected_files)} selected",
+        expanded=False,
+        icon=":material/folder_data:",
+    ):
+        if not active_workspace:
+            st.info("Import a project in Project workspace to browse its safe, supported files.")
+        elif not active_workspace.files:
+            st.warning("No supported text files were found. Check the workspace path or refresh after adding source files.")
+        else:
+            indexed_by_path = {file.relative_path: file for file in active_workspace.files}
+            available_paths = set(indexed_by_path)
+            selected_paths = set(st.session_state.workspace_selected_files) & available_paths
+            st.session_state.workspace_selected_files = selected_paths
+            selected_chars = sum(len(indexed_by_path[path].text) for path in selected_paths)
+            st.caption(f"{active_workspace.root.name or active_workspace.root} · {active_workspace.root}")
+            st.caption(
+                f"{len(selected_paths)} selected · ~{selected_chars:,} chars · "
+                f"~{(selected_chars + 3) // 4:,} tokens estimated · "
+                f"AI context limit {MAX_SELECTED_WORKSPACE_CONTEXT_CHARS:,} chars"
+            )
+            st.button(
+                "Clear selected files",
+                key="workspace_clear_selection",
+                icon=":material/deselect:",
+                disabled=not selected_paths,
+                on_click=clear_workspace_selection,
+                use_container_width=True,
+            )
+            if selected_paths:
+                ordered_selected = sorted(selected_paths)
+                shown = ", ".join(f"`{path}`" for path in ordered_selected[:5])
+                if len(ordered_selected) > 5:
+                    shown += f" and {len(ordered_selected) - 5} more"
+                st.markdown("**Selected for AI context:** " + shown)
+            else:
+                st.info(
+                    "No files selected. Choose files below for full-file context; without a selection, "
+                    "V-Ask can still retrieve relevant indexed excerpts for your question."
+                )
+            st.text_input(
+                "Filter files",
+                key="workspace_file_filter",
+                placeholder="Search paths or filenames...",
+                label_visibility="collapsed",
+            )
+            tree = build_file_tree(active_workspace)
+            visible_count = [0]
+            truncated_tree = render_workspace_tree(
+                tree,
+                active_workspace.root,
+                query=st.session_state.workspace_file_filter,
+                visible=visible_count,
+            )
+            if truncated_tree:
+                st.caption("Showing the first 240 matching tree entries. Filter paths to find other files.")
+            st.caption("Only indexed text files are shown. Excluded folders, sensitive files, binary files, and oversized files are never sent.")
 
     st.markdown('<div class="vask-side-label">Your tools</div>', unsafe_allow_html=True)
     with st.expander("Personal notes", expanded=False, icon=":material/sticky_note_2:"):
@@ -454,7 +764,7 @@ def confirm_history_deletion():
         st.session_state.confirm_delete_history = False
         st.rerun()
     if delete_col.button("Delete history", key="confirm_clear_history", icon=":material/delete_forever:", type="primary", use_container_width=True):
-        clear_conversation(st.session_state.conversation_id)
+        clear_conversation(_active_conversation_id())
         st.session_state.pending_action = None
         st.session_state.change_proposal = None
         st.session_state.confirm_delete_history = False
@@ -464,78 +774,8 @@ def confirm_history_deletion():
 if st.session_state.confirm_delete_history:
     confirm_history_deletion()
 
-messages = get_messages(st.session_state.conversation_id)
-active_workspace = st.session_state.workspace_index
-if messages:
-    st.markdown(
-        '<div class="vask-page-header"><div class="vask-page-eyebrow">V-Ask / Developer workspace</div>'
-        '<div class="vask-page-status"><span>●</span> Conversation</div></div>',
-        unsafe_allow_html=True,
-    )
-else:
-    welcome_class = "welcome-enter" if not st.session_state.welcome_animation_played else ""
-    st.session_state.welcome_animation_played = True
-    hero_copy, hero_orbit = st.columns([1.2, .8], gap="large", vertical_alignment="center")
-    with hero_copy:
-        st.markdown(
-            f'<section class="welcome-shell {welcome_class}">'
-            '<div class="welcome-kicker">V-Ask · Your developer workspace</div>'
-            '<h1 class="welcome-title">Your code.<br>Your next breakthrough.</h1>'
-            '<p class="welcome-copy">Understand your codebase, investigate bugs, review changes, and shape what comes next—with V-Ask alongside you.</p>'
-            + (
-                f'<p class="welcome-status">Workspace ready · {active_workspace.file_count:,} files indexed</p>'
-                if active_workspace else
-                '<p class="welcome-status">Ready for your code, context, and next question</p>'
-            )
-            + '<p class="welcome-note">A focused AI workspace for thinking clearly and building confidently.</p>'
-            '</section>',
-            unsafe_allow_html=True,
-        )
-        start_col, explore_col = st.columns(2, gap="small")
-        if start_col.button("New conversation", key="welcome_new_conversation", icon=":material/add_comment:", type="primary", use_container_width=True):
-            start_new_conversation_action()
-            st.rerun()
-        if explore_col.button("Explore project", key="welcome_explore_project", icon=":material/folder_open:", use_container_width=True):
-            explore_project_action()
-            st.rerun()
-    with hero_orbit:
-        logo_data = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
-        st.markdown(
-            '<div class="welcome-orbit"><div class="orbit-stage" role="img" aria-label="V-Ask logo surrounded by slowly orbiting lime indicators">'
-            '<div class="orbit-track orbit-track--outer"></div>'
-            '<div class="orbit-track orbit-track--middle"></div>'
-            '<div class="orbit-track orbit-track--inner"></div>'
-            f'<div class="orbit-core"><img src="data:image/png;base64,{logo_data}" alt="V-Ask" /></div>'
-            '<span class="orbit-label orbit-label--top">CODE</span>'
-            '<span class="orbit-label orbit-label--bottom">CONTEXT</span>'
-            '</div></div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown('<div class="quick-action-title">Developer workflows</div>', unsafe_allow_html=True)
-    quick_actions = [
-        ("Explain Code", "Explain Code", ":material/code:", "Understand a function, module, or code snippet."),
-        ("Debug Assistant", "Debug Code", ":material/bug_report:", "Investigate an error and get concrete fixes."),
-        ("Code Review", "Review Code", ":material/rule:", "Look for correctness, readability, and security issues."),
-        ("Generate Tests", "Generate Tests", ":material/science:", "Draft tests that follow the supplied framework."),
-        ("General chat", "Explore Project", ":material/folder_open:", "Ask questions with relevant indexed project context."),
-    ]
-    quick_columns = st.columns(2)
-    for position, (target_mode, title, icon, help_text) in enumerate(quick_actions):
-        with quick_columns[position % 2]:
-            with st.container(key=f"quick-action-{position}"):
-                if st.button(title, key=f"quick_mode_{position}", icon=icon, help=help_text, use_container_width=True):
-                    st.session_state.assistant_mode = target_mode
-                    if target_mode == "General chat":
-                        st.session_state.quick_action_notice = (
-                            "Project context is active for your next question."
-                            if st.session_state.workspace_index
-                            else "Index a project in the sidebar to add code context to your questions."
-                        )
-                    else:
-                        st.session_state.quick_action_notice = f"{title} selected. Add your code and context below."
-                    st.rerun()
-
-def clear_quick_action_notice() -> None:
+def handle_mode_change() -> None:
+    switch_assistant_workspace()
     st.session_state.quick_action_notice = ""
 
 
@@ -547,12 +787,57 @@ mode = st.segmented_control(
     label_visibility="collapsed",
     width="stretch",
     wrap=True,
-    on_change=clear_quick_action_notice,
+    on_change=handle_mode_change,
 ) or "General chat"
+_active_conversation_id()
 if st.session_state.quick_action_notice:
     st.caption(st.session_state.quick_action_notice)
 else:
     st.caption(MODE_HINTS[mode])
+
+messages = get_messages(_active_conversation_id())
+active_workspace = st.session_state.workspace_index
+if messages:
+    st.markdown(
+        '<div class="vask-page-header"><div class="vask-page-eyebrow">V-Ask / Developer workspace</div>'
+        '<div class="vask-page-status"><span>●</span> Conversation</div></div>',
+        unsafe_allow_html=True,
+    )
+else:
+    logo_intro_class = "logo-intro" if not st.session_state.logo_intro_played else ""
+    logo_data = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+    hero_logo, hero_content = st.columns([.8, 1.2], gap="large", vertical_alignment="center")
+    with hero_logo:
+        st.markdown(
+            f'<div class="vask-welcome-logo {logo_intro_class}" aria-label="V-Ask logo">'
+            f'<img src="data:image/png;base64,{logo_data}" alt="V-Ask" /></div>',
+            unsafe_allow_html=True,
+        )
+        with st.container(key="welcome-logo-actions"):
+            st.button(
+                "New conversation", key="welcome_new_conversation", icon=":material/add_comment:",
+                type="primary", use_container_width=True, on_click=start_new_conversation_action,
+            )
+            st.button(
+                "Explore project", key="welcome_explore_project", icon=":material/folder_open:",
+            use_container_width=True, on_click=open_project_import,
+            )
+    with hero_content:
+        st.markdown(
+            '<section class="welcome-shell">'
+            '<div class="welcome-kicker">V-Ask · Developer workspace</div>'
+            '<h1 class="welcome-title">Think clearly.<br>Build confidently.</h1>'
+            '<p class="welcome-copy">Understand your codebase, investigate bugs, review changes, and make safe, reviewable progress in one focused workspace.</p>'
+            + (
+                f'<p class="welcome-status">Workspace ready · {active_workspace.file_count:,} files indexed</p>'
+                if active_workspace else
+                '<p class="welcome-status">Ready for your code, context, and next question</p>'
+            )
+            + '<p class="welcome-note">Choose a workflow below, or start with a message.</p>'
+            '</section>',
+            unsafe_allow_html=True,
+        )
+    st.session_state.logo_intro_played = True
 
 for message in messages:
     with st.chat_message(message["role"]):
@@ -567,7 +852,12 @@ if st.session_state.generate_change_request:
     else:
         with st.spinner("Finding relevant project code and preparing a proposal..."):
             try:
-                retrieved = search_workspace(active_workspace, request)
+                context_result = build_workspace_context(
+                    active_workspace,
+                    request,
+                    st.session_state.workspace_selected_files,
+                )
+                retrieved = context_result.content
                 paths = context_file_paths(retrieved)
                 if not paths:
                     st.error("No relevant indexed source files were found. Try a more specific request or refresh the workspace.")
@@ -617,10 +907,8 @@ if proposal:
             apply_col, reject_col, discard_col = st.columns(3)
             if apply_col.button("Apply reviewed changes", key="apply_change_proposal", type="primary", icon=":material/check:", use_container_width=True):
                 active_workspace = st.session_state.workspace_index
-                selected_path = st.session_state.get("workspace_path_input", "").strip()
                 try:
-                    from workspace_reader import resolve_workspace
-                    if not active_workspace or resolve_workspace(selected_path) != active_workspace.root:
+                    if not active_workspace or resolve_workspace(active_workspace.root) != active_workspace.root:
                         proposal.state = ProposalState.CONFLICT
                         proposal.results = [{"path": "", "status": "Conflict", "detail": "The selected workspace changed. Reindex and generate a new proposal."}]
                     else:
@@ -630,7 +918,7 @@ if proposal:
                                 st.session_state.workspace_index = index_workspace(active_workspace.root)
                                 st.session_state.workspace_refresh_warning = ""
                             except Exception:
-                                st.session_state.workspace_refresh_warning = "Changes were applied, but the workspace index could not refresh. Use Index / refresh before asking follow-up questions."
+                                st.session_state.workspace_refresh_warning = "Changes were applied, but the workspace index could not refresh. Reopen the imported project before asking follow-up questions."
                 except Exception:
                     proposal.state = ProposalState.FAILED
                     proposal.results = [{"path": "", "status": "Failed", "detail": "The workspace could not be validated for safe application."}]
@@ -671,20 +959,27 @@ if mode == "General chat":
         uploaded_files = submitted.files if not isinstance(submitted, str) else []
         prompt = submitted.text.strip() if not isinstance(submitted, str) else submitted.strip()
 else:
-    with st.form("developer_composer", clear_on_submit=True):
+    mode_key = mode.casefold().replace(" ", "_")
+    with st.form(f"developer_composer_{mode_key}", clear_on_submit=True):
         st.markdown(f"**{mode} · inputs**")
-        request_text = st.text_input("Request (optional)", placeholder=f"What do you want V-Ask to do? · {mode}")
-        developer_inputs["code"] = st.text_area(
-            "Code", height=200, placeholder="Paste code here."
+        request_text = st.text_input(
+            "Request (optional)", key=f"developer_request_{mode_key}",
+            placeholder=f"What do you want V-Ask to do? · {mode}",
         )
-        developer_inputs["error"] = st.text_area("Error message (optional)", height=100)
+        developer_inputs["code"] = st.text_area(
+            "Code", key=f"developer_code_{mode_key}", height=200, placeholder="Paste code here."
+        )
+        developer_inputs["error"] = st.text_area(
+            "Error message (optional)", key=f"developer_error_{mode_key}", height=100,
+        )
         developer_inputs["context"] = st.text_area(
-            "Additional context (optional)", height=100,
+            "Additional context (optional)", key=f"developer_context_{mode_key}", height=100,
             placeholder="Language, framework, expected behavior, constraints…",
         )
         uploaded_files = st.file_uploader(
             "Attach project notes (PDF or TXT)", type=["pdf", "txt"],
             accept_multiple_files=True, max_upload_size=MAX_UPLOAD_MB,
+            key=f"developer_upload_{mode_key}",
         )
         submitted = st.form_submit_button("Send to V-Ask", icon=":material/send:", type="primary", use_container_width=True)
     if submitted:
@@ -718,14 +1013,16 @@ if submitted:
 
 if prompt:
     st.session_state.pending_action = detect_action(prompt) if mode == "General chat" else None
-    add_message(st.session_state.conversation_id, "user", prompt)
+    add_message(_active_conversation_id(), "user", prompt)
     with st.chat_message("user"):
         st.markdown(prompt)
     context = retrieve(prompt, st.session_state.documents)
-    workspace_context = ""
     active_workspace = st.session_state.workspace_index
-    if active_workspace:
-        workspace_context = search_workspace(active_workspace, prompt)
+    workspace_context_result = build_workspace_context(
+        active_workspace,
+        prompt,
+        st.session_state.workspace_selected_files,
+    )
     normalized_prompt = prompt.casefold()
     summary_phrases = ("summarize", "summary", "give me an overview", "\u0074\u00f3m t\u1eaft")
     if st.session_state.documents and any(phrase in normalized_prompt for phrase in summary_phrases):
@@ -735,9 +1032,28 @@ if prompt:
         else:
             context = "The uploaded file(s) contain no extractable text. Explain that the PDF may be scanned or image-only and request a text-based copy."
     with st.chat_message("assistant"):
+        if workspace_context_result.included_files:
+            st.caption(
+                "Selected project files included: "
+                + ", ".join(f"`{path}`" for path in workspace_context_result.included_files)
+            )
+        if workspace_context_result.truncated_files:
+            st.warning(
+                "Some selected files were truncated to fit the AI context limit: "
+                + ", ".join(workspace_context_result.truncated_files)
+            )
+        if workspace_context_result.omitted_files:
+            with st.expander(f"Selected files omitted · {len(workspace_context_result.omitted_files)}"):
+                for issue in workspace_context_result.omitted_files:
+                    st.caption(f"{issue.path}: {issue.reason}")
+        if workspace_context_result.retrieved_files:
+            st.caption(
+                "Relevant indexed excerpts also included: "
+                + ", ".join(f"`{path}`" for path in workspace_context_result.retrieved_files)
+            )
         with st.spinner("V-Ask is thinking..."):
             try:
-                history = get_messages(st.session_state.conversation_id)
+                history = get_messages(_active_conversation_id())
                 notes_text = "\n".join(f"- {n['content']}" for n in get_notes())
                 note_terms = ("note", "remember", "\u0067hi ch\u00fa", "\u0111\u00e3 l\u01b0u")
                 if notes_text and any(term in prompt.casefold() for term in note_terms):
@@ -750,10 +1066,10 @@ if prompt:
                 else:
                     reply = answer(
                         history[-20:], context, mode=mode,
-                        workspace_context=workspace_context,
+                        workspace_context=workspace_context_result.content,
                     )
                 st.markdown(reply)
-                add_message(st.session_state.conversation_id, "assistant", reply)
+                add_message(_active_conversation_id(), "assistant", reply)
             except Exception as exc:
                 st.error("Could not reach the model. Check the connection, API configuration, and model availability.")
 

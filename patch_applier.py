@@ -73,7 +73,7 @@ class Hunk:
 
 
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:.*)$")
-_CONTEXT_FILE = re.compile(r"(?m)^File: (.+?) \(lines \d+-\d+\)")
+_CONTEXT_FILE = re.compile(r"(?m)^File: (.+?)(?: \(lines \d+-\d+\))?$")
 _WRITE_LOCKS: dict[str, threading.Lock] = {}
 _WRITE_LOCKS_GUARD = threading.Lock()
 

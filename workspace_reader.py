@@ -4,15 +4,17 @@ from __future__ import annotations
 import os
 import re
 import stat
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from config import MAX_WORKSPACE_CONTEXT_CHARS
 
 
 MAX_FILE_BYTES = 512 * 1024
 MAX_INDEX_BYTES = 20 * 1024 * 1024
 MAX_INDEX_FILES = 2_000
 MAX_SCAN_ENTRIES = 25_000
-MAX_WORKSPACE_CONTEXT_CHARS = 12_000
 
 SUPPORTED_SUFFIXES = {
     ".py", ".pyi", ".java", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
@@ -216,6 +218,11 @@ def _contains_secret(text: str) -> bool:
     )
 
 
+def _code_fence(text: str) -> str:
+    longest = max((len(match.group(0)) for match in re.finditer(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
+
+
 def _is_symlink_or_reparse_point(path: Path) -> bool:
     """Reject symbolic links and Windows junction/mount-point reparse entries."""
     try:
@@ -257,6 +264,33 @@ def _read_bounded_text(root: Path, relative_path: str, max_bytes: int) -> tuple[
             os.close(descriptor)
     except (OSError, RuntimeError, UnicodeError, ValueError, WorkspaceError):
         return None
+
+
+def read_workspace_file(
+    root: str | os.PathLike[str],
+    relative_path: str,
+    *,
+    max_bytes: int = MAX_FILE_BYTES,
+) -> tuple[str, int]:
+    """Safely reread one supported workspace file without exposing OS or file contents in errors."""
+    if max_bytes <= 0:
+        raise ValueError("File read limit must be positive.")
+    canonical_root = resolve_workspace(root)
+    normalized = relative_path.replace("\\", "/") if isinstance(relative_path, str) else ""
+    if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+        raise WorkspaceError("Workspace paths with control characters are not supported.")
+    parts = PurePosixPath(normalized).parts
+    if any(part.casefold() in EXCLUDED_DIRS for part in parts[:-1]):
+        raise WorkspaceError("This file is in an excluded workspace directory.")
+    if not _is_supported(normalized) or _is_sensitive_path(normalized):
+        raise WorkspaceError("This file type or sensitive path cannot be added to AI context.")
+    path = resolve_workspace_file(canonical_root, normalized)
+    loaded = _read_bounded_text(canonical_root, normalized, max_bytes)
+    if loaded is None:
+        raise WorkspaceError(
+            "This file could not be read safely. It may be unreadable, binary, malformed, oversized, changed, or contain sensitive data."
+        )
+    return loaded
 
 
 def index_workspace(
@@ -302,6 +336,9 @@ def index_workspace(
             try:
                 relative = path_obj.relative_to(root).as_posix()
             except ValueError:
+                skipped_files += 1
+                continue
+            if any(ord(char) < 32 or ord(char) == 127 for char in relative):
                 skipped_files += 1
                 continue
             if not _is_supported(relative):
@@ -353,6 +390,33 @@ def _query_terms(query: str) -> list[str]:
     ]
 
 
+def _truncate_workspace_excerpt(excerpt: str, max_chars: int) -> str | None:
+    """Trim an excerpt while retaining its file header and balanced code fence."""
+    try:
+        header, language_line, code_and_fence = excerpt.split("\n", 2)
+    except ValueError:
+        return None
+    fence_match = re.match(r"(`+)", language_line)
+    if not fence_match:
+        return None
+    fence = fence_match.group(1)
+    ending = "\n" + fence
+    if not code_and_fence.endswith(ending):
+        return None
+    code = code_and_fence[:-len(ending)]
+    prefix = f"{header}\n{language_line}\n"
+    marker = "\n... [excerpt truncated to fit workspace context limit]"
+    room = max_chars - len(prefix) - len(marker) - len(ending)
+    if room <= 0:
+        return None
+    content = code[:room]
+    last_newline = content.rfind("\n")
+    if last_newline >= int(room * .6):
+        content = content[:last_newline]
+    result = prefix + content + marker + ending
+    return result if len(result) <= max_chars else None
+
+
 def search_workspace(
     index: WorkspaceIndex,
     query: str,
@@ -362,6 +426,7 @@ def search_workspace(
     lines_before: int = 3,
     lines_after: int = 8,
     max_lines_per_excerpt: int = 18,
+    exclude_paths: Iterable[str] = (),
 ) -> str:
     """Find matching code and return bounded excerpts with relative paths and line ranges."""
     if not query.strip() or not index.files or max_results <= 0 or max_context_chars <= 0:
@@ -370,8 +435,11 @@ def search_workspace(
     if not terms:
         return "No relevant code excerpts were found in the indexed workspace."
 
+    excluded = set(exclude_paths)
     candidates: list[tuple[int, str, str]] = []
     for file in index.files:
+        if file.relative_path in excluded:
+            continue
         lines = file.text.splitlines()
         path_text = file.relative_path.casefold()
         matching_lines: list[tuple[int, int]] = []
@@ -413,9 +481,11 @@ def search_workspace(
                 if len(line) > 1_000:
                     line = line[:1_000] + " … [line truncated]"
                 excerpt_lines.append(f"{number}: {line}")
+            excerpt_content = "\n".join(excerpt_lines)
+            fence = _code_fence(excerpt_content)
             excerpt = (
                 f"File: {file.relative_path} (lines {start}-{end})\n"
-                f"```{ext}\n" + "\n".join(excerpt_lines) + "\n```"
+                f"{fence}{ext}\n{excerpt_content}\n{fence}"
             )
             candidates.append((score + path_score, file.relative_path, excerpt))
 
@@ -429,7 +499,9 @@ def search_workspace(
         if used + cost > max_context_chars:
             remaining = max_context_chars - used - separator_size
             if remaining >= 100:
-                selected.append(excerpt[:remaining])
+                truncated_excerpt = _truncate_workspace_excerpt(excerpt, remaining)
+                if truncated_excerpt:
+                    selected.append(truncated_excerpt)
             break
         selected.append(excerpt)
         used += cost

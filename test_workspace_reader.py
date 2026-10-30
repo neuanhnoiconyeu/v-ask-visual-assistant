@@ -11,6 +11,7 @@ from workspace_reader import (
     WorkspaceError,
     _is_symlink_or_reparse_point,
     index_workspace,
+    read_workspace_file,
     resolve_workspace,
     resolve_workspace_file,
     search_workspace,
@@ -123,6 +124,33 @@ class WorkspaceReaderTests(unittest.TestCase):
         self.assertEqual(file_limited.file_count, 1)
         self.assertTrue(file_limited.truncated)
 
+    def test_skips_binary_and_invalid_utf8_files(self):
+        binary = self.root / "binary.py"
+        malformed = self.root / "malformed.py"
+        binary.write_bytes(b"value = 1\x00\x01")
+        malformed.write_bytes(b"value = \xff\xfe")
+
+        index = index_workspace(self.root)
+
+        self.assertEqual(index.files, ())
+        self.assertGreaterEqual(index.skipped_files, 2)
+
+    def test_selected_file_reread_rechecks_size_encoding_and_sensitive_content(self):
+        self._write("safe.py", "value = 1\n")
+        self.assertEqual(read_workspace_file(self.root, "safe.py")[0].strip(), "value = 1")
+        with self.assertRaises(WorkspaceError):
+            read_workspace_file(self.root, "../outside.py")
+
+        invalid = self.root / "invalid.py"
+        invalid.write_bytes(b"value = \xff")
+        with self.assertRaises(WorkspaceError):
+            read_workspace_file(self.root, "invalid.py")
+
+        secret = self.root / "secret.py"
+        secret.write_text('API_KEY = "this-is-a-very-secret-value"\n', encoding="utf-8")
+        with self.assertRaises(WorkspaceError):
+            read_workspace_file(self.root, "secret.py")
+
     def test_retrieval_returns_relevant_path_and_line_ranges(self):
         self._write(
             "src/totals.py",
@@ -148,6 +176,17 @@ class WorkspaceReaderTests(unittest.TestCase):
         self.assertLessEqual(len(result), 500)
         self.assertIn("File: src/large.py", result)
         self.assertIn("No relevant code excerpts", search_workspace(index, "not_present_xyz"))
+
+    def test_retrieval_truncation_preserves_file_header_and_balanced_fence(self):
+        self._write("src/large.py", "\n".join(f"needle_value_{i} = 'x' * 40" for i in range(80)))
+        index = index_workspace(self.root)
+
+        result = search_workspace(index, "needle_value", max_context_chars=240)
+
+        self.assertLessEqual(len(result), 240)
+        self.assertIn("File: src/large.py", result)
+        self.assertIn("excerpt truncated", result)
+        self.assertTrue(result.rstrip().endswith("```"))
 
 
 if __name__ == "__main__":

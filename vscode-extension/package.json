@@ -1,0 +1,43 @@
+{
+  "name": "v-ask-developer-assistant",
+  "displayName": "V-Ask — Developer Assistant",
+  "publisher": "vask-local",
+  "version": "0.5.0",
+  "description": "V-Ask coding assistant for VS Code, backed by the local V-Ask Python service.",
+  "engines": { "vscode": "^1.96.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onView:vask.assistant", "onCommand:vask.openAssistant"],
+  "main": "./out/extension.js",
+  "files": ["out/**", "resources/**", "README.md", "package.json"],
+  "contributes": {
+    "configuration": {
+      "title": "V-Ask",
+      "properties": {
+        "vask.pythonPath": { "type": "string", "default": "python", "description": "Python executable used to start the local V-Ask service." },
+        "vask.backendPath": { "type": "string", "default": "", "description": "Absolute path to the V-Ask repository containing vask_service.py. Required for an installed VSIX." },
+        "vask.requestTimeoutMs": { "type": "number", "default": 120000, "minimum": 1000, "description": "Timeout for AI requests." }
+      }
+    },
+    "viewsContainers": { "activitybar": [{ "id": "vask", "title": "V-Ask", "icon": "resources/vask.svg" }] },
+    "views": { "vask": [{ "type": "webview", "id": "vask.assistant", "name": "Assistant" }] },
+    "commands": [
+      { "command": "vask.openAssistant", "title": "V-Ask: Open Assistant" },
+      { "command": "vask.newConversation", "title": "V-Ask: New Conversation" },
+      { "command": "vask.explainSelection", "title": "V-Ask: Explain Selection" },
+      { "command": "vask.explainActiveFile", "title": "V-Ask: Explain Active File" },
+      { "command": "vask.debugSelection", "title": "V-Ask: Debug Selection" },
+      { "command": "vask.reviewSelection", "title": "V-Ask: Review Selection" },
+      { "command": "vask.generateTests", "title": "V-Ask: Generate Tests" },
+      { "command": "vask.addFileToContext", "title": "V-Ask: Add File to Context" },
+      { "command": "vask.refreshProjectIndex", "title": "V-Ask: Refresh Project Index" },
+      { "command": "vask.openSettings", "title": "V-Ask: Open Settings" }
+    ],
+    "menus": { "editor/context": [
+      { "command": "vask.explainSelection", "when": "editorHasSelection", "group": "navigation@20" },
+      { "command": "vask.reviewSelection", "when": "editorHasSelection", "group": "navigation@21" },
+      { "command": "vask.debugSelection", "when": "editorHasSelection", "group": "navigation@22" }
+    ] }
+  },
+  "scripts": { "vscode:prepublish": "npm run compile", "compile": "node ./node_modules/typescript/bin/tsc -p .", "watch": "node ./node_modules/typescript/bin/tsc -watch -p .", "package": "node -e \"require('fs').mkdirSync('../dist',{recursive:true})\" && node ./node_modules/@vscode/vsce/vsce package --out ../dist/v-ask-vscode.vsix" },
+  "devDependencies": { "@types/node": "^22.10.0", "@types/vscode": "^1.96.0", "@vscode/vsce": "^3.2.0", "typescript": "^5.7.2" }
+}
