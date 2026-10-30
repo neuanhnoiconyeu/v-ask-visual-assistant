@@ -20,4 +20,6 @@ These commands require the extension development dependencies. If npm reports a 
 
 Once npm dependencies are available, compile and package first. Then install the VSIX in a disposable workspace and manually verify: generate a multi-file proposal, inspect each unified diff, open the native diff preview, reject a proposal, apply a proposal after the modal confirmation, and change an original file before apply to confirm the backend reports a conflict rather than overwriting it.
 
+Also test backend discovery with (a) the V-Ask repository open directly and (b) an unrelated workspace. In the unrelated workspace, use **V-Ask: Configure Backend** to choose the checkout, then run **V-Ask: Test Backend Connection**. Confirm invalid folders are rejected, multi-root ambiguity does not choose a backend silently, and no token appears in Output → **V-Ask**.
+
 Install the resulting VSIX with `code --install-extension ..\dist\v-ask-vscode.vsix`, then configure `vask.backendPath`. Manual verification should cover editor-selection commands, an indexed workspace, a configured Nebius response, and proposal review before any apply action.

@@ -16,6 +16,8 @@ V-Ask keeps its Streamlit application as one client of shared Python modules. Th
 
 The extension starts `vask_service.py` on loopback with a random per-process token. The service accepts only `127.0.0.1` connections and requires `X-Vask-Token`; it does not expose CORS or API keys. The webview talks only to the extension host, never directly to the Python service.
 
+For an installed VSIX, backend discovery never uses a path relative to the extension directory. It prioritizes an explicit `vask.backendPath`, a single recognized workspace-local V-Ask repository, then a previously validated backend location. Ambiguous multi-root workspaces require explicit configuration.
+
 ## Data flow and boundaries
 
 1. VS Code passes a selected snippet/active workspace root to the extension host.

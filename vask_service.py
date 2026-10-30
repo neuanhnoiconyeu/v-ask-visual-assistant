@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import secrets
+import sys
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +28,7 @@ API_VERSION = "v1"
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_MESSAGE_CHARS = 50_000
 MAX_PROPOSAL_PREVIEW_CHARS = 1_000_000
+MAX_EDITOR_CONTEXT_CHARS = 100_000
 
 
 class ApiError(ValueError):
@@ -79,6 +81,25 @@ class VaskService:
             raise ApiError("invalid_request", "selectedFiles must be a list of relative file paths.")
         return set(value[:200])
 
+    def _editor_context(self, value: Any) -> tuple[str, dict[str, Any]]:
+        if value is None:
+            return "", {"included": False}
+        if not isinstance(value, dict):
+            raise ApiError("invalid_request", "editorContext must be an object.")
+        content = value.get("content")
+        relative = value.get("relativePath", "untitled document")
+        language = value.get("languageId", "text")
+        if not isinstance(content, str) or not isinstance(relative, str) or not isinstance(language, str):
+            raise ApiError("invalid_request", "editorContext fields are invalid.")
+        if not content.strip():
+            return "", {"included": False, "path": relative}
+        truncated = len(content) > MAX_EDITOR_CONTEXT_CHARS
+        content = content[:MAX_EDITOR_CONTEXT_CHARS]
+        fence = "```" if "```" not in content else "````"
+        return f"Active editor buffer (may include unsaved changes): {relative}\n{fence}{language}\n{content}\n{fence}", {
+            "included": True, "path": relative, "language": language, "truncated": truncated,
+        }
+
     def health(self) -> dict[str, Any]:
         return {"apiVersion": API_VERSION, "status": "ok", "indexedWorkspaces": len(self.indexes)}
 
@@ -102,12 +123,13 @@ class VaskService:
         conversation_id = payload.get("conversationId")
         if not isinstance(conversation_id, str) or not conversation_id:
             conversation_id = new_conversation(mode)
-        workspace_context = ""
-        context_meta: dict[str, Any] = {"includedFiles": [], "retrievedFiles": [], "omittedFiles": []}
+        active_context, active_meta = self._editor_context(payload.get("editorContext"))
+        workspace_context = active_context
+        context_meta: dict[str, Any] = {"includedFiles": [], "retrievedFiles": [], "omittedFiles": [], "activeEditor": active_meta}
         if payload.get("workspaceRoot"):
             index = self._index(payload.get("workspaceRoot"))
             context = build_workspace_context(index, prompt, self._selected_paths(payload.get("selectedFiles")))
-            workspace_context = context.content
+            workspace_context = "\n\n---\n\n".join(part for part in (active_context, context.content) if part)
             context_meta = {
                 "includedFiles": list(context.included_files), "retrievedFiles": list(context.retrieved_files),
                 "omittedFiles": [asdict(item) for item in context.omitted_files],
@@ -124,6 +146,8 @@ class VaskService:
 
     def proposal(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = self._text(payload.get("request"), "request")
+        if payload.get("mode") is not None:
+            self._mode(payload.get("mode"))
         index = self._index(payload.get("workspaceRoot"))
         context = build_workspace_context(index, request, self._selected_paths(payload.get("selectedFiles")))
         paths = context_file_paths(context.content)
@@ -138,11 +162,40 @@ class VaskService:
         except Exception:
             raise ApiError("provider_request_failed", "The AI provider request failed. Check connection and configuration.", HTTPStatus.BAD_GATEWAY) from None
         try:
-            proposal = build_change_proposal(index, request, raw, set(hashes))
+            normalized = self._normalized_proposal_response(raw)
+            self._proposal_diagnostic(raw, normalized)
+            proposal = build_change_proposal(index, request, normalized, set(hashes))
         except (ValueError, WorkspaceError) as exc:
             raise ApiError("proposal_invalid", str(exc)) from None
         self.proposals[proposal.proposal_id] = proposal
         return self._proposal_payload(proposal)
+
+    @staticmethod
+    def _normalized_proposal_response(raw: str) -> str:
+        """Accept presentation-only Markdown fencing while retaining strict JSON validation."""
+        candidate = raw.strip()
+        lines = candidate.splitlines()
+        if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
+            return "\n".join(lines[1:-1]).strip()
+        return candidate
+
+    @staticmethod
+    def _proposal_diagnostic(raw: str, normalized: str) -> None:
+        """Emit only response structure metadata for local startup diagnostics."""
+        try:
+            value = json.loads(normalized)
+        except (TypeError, json.JSONDecodeError):
+            wrapper = "markdown_fence" if isinstance(raw, str) and raw.lstrip().startswith("```") else "plain"
+            print(f"VASK_PROPOSAL_DIAGNOSTIC chars={len(raw) if isinstance(raw, str) else 0} shape=non_json wrapper={wrapper}", file=sys.stderr, flush=True)
+            return
+        if not isinstance(value, dict):
+            print(f"VASK_PROPOSAL_DIAGNOSTIC chars={len(raw)} shape={type(value).__name__}", file=sys.stderr, flush=True)
+            return
+        files = value.get("files")
+        file_shape = f"list:{len(files)}" if isinstance(files, list) else type(files).__name__
+        keys = ",".join(sorted(str(key) for key in value.keys())[:8])
+        wrapper = "markdown_fence" if raw.strip() != normalized else "none"
+        print(f"VASK_PROPOSAL_DIAGNOSTIC chars={len(raw)} wrapper={wrapper} keys={keys} files={file_shape}", file=sys.stderr, flush=True)
 
     def proposal_action(self, proposal_id: str, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         proposal = self.proposals.get(proposal_id)

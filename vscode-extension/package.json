@@ -13,8 +13,8 @@
     "configuration": {
       "title": "V-Ask",
       "properties": {
-        "vask.pythonPath": { "type": "string", "default": "python", "description": "Python executable used to start the local V-Ask service." },
-        "vask.backendPath": { "type": "string", "default": "", "description": "Absolute path to the V-Ask repository containing vask_service.py. Required for an installed VSIX." },
+        "vask.pythonPath": { "type": "string", "default": "", "description": "Python executable used to start the local V-Ask service. When empty, V-Ask uses the backend repository's .venv interpreter when available." },
+        "vask.backendPath": { "type": "string", "default": "", "description": "Absolute path to the V-Ask repository or directly to vask_service.py. Required for an installed VSIX." },
         "vask.requestTimeoutMs": { "type": "number", "default": 120000, "minimum": 1000, "description": "Timeout for AI requests." }
       }
     },
@@ -30,6 +30,8 @@
       { "command": "vask.generateTests", "title": "V-Ask: Generate Tests" },
       { "command": "vask.addFileToContext", "title": "V-Ask: Add File to Context" },
       { "command": "vask.refreshProjectIndex", "title": "V-Ask: Refresh Project Index" },
+      { "command": "vask.configureBackend", "title": "V-Ask: Configure Backend" },
+      { "command": "vask.testBackendConnection", "title": "V-Ask: Test Backend Connection" },
       { "command": "vask.openSettings", "title": "V-Ask: Open Settings" }
     ],
     "menus": { "editor/context": [

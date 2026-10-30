@@ -38,6 +38,16 @@ class VaskServiceTests(unittest.TestCase):
         self.assertEqual(response["context"]["includedFiles"], ["app.py"])
         self.assertEqual(mocked.call_args.kwargs["mode"], "Explain Code")
 
+    def test_chat_includes_unsaved_active_editor_buffer_without_reading_disk(self):
+        with patch("vask_service.answer", return_value="Hello") as mocked:
+            response = self.service.chat({
+                "mode": "Debug Assistant", "message": "Check this file",
+                "editorContext": {"relativePath": "main.cpp", "languageId": "cpp", "content": "int main(){ return 42; }"},
+            })
+        self.assertTrue(response["context"]["activeEditor"]["included"])
+        self.assertIn("Active editor buffer", mocked.call_args.kwargs["workspace_context"])
+        self.assertIn("return 42", mocked.call_args.kwargs["workspace_context"])
+
     def test_invalid_modes_and_workspace_paths_are_rejected(self):
         with self.assertRaises(ApiError) as mode_error:
             self.service.new_conversation({"mode": "not a mode"})
@@ -108,6 +118,14 @@ class VaskServiceTests(unittest.TestCase):
         self.assertFalse(file["previewAvailable"])
         self.assertIsNone(file["originalContent"])
         self.assertTrue(file["diff"])
+
+    def test_markdown_fenced_proposal_json_is_normalized_before_strict_validation(self):
+        response = '{"schema_version":1,"explanation":"x","files":[]}'
+        self.assertEqual(
+            self.service._normalized_proposal_response("```json\n" + response + "\n```"),
+            response,
+        )
+        self.assertEqual(self.service._normalized_proposal_response("plain text"), "plain text")
 
     def test_invalid_proposal_and_unsafe_or_provider_failed_proposals_are_rejected(self):
         with self.assertRaises(ApiError) as missing:

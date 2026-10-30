@@ -109,6 +109,8 @@ code --install-extension ..\dist\v-ask-vscode.vsix
 
 After installation, set `vask.backendPath` to the absolute path of `vask_service.py` in this checkout and set `vask.pythonPath` if `python` does not identify the intended virtual environment. Configure the Nebius key through the existing local configuration, never through the VS Code webview.
 
+When this repository is the active workspace, the extension can detect its backend automatically. When another project is open, use **V-Ask: Configure Backend** once and select this repository or `vask_service.py`; it validates the selected V-Ask structure and loopback health check before saving a user-level setting. The extension never searches arbitrary disk locations or stores API keys/tokens in VS Code settings.
+
 If `npm install` reports `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, keep TLS verification enabled. When the trusted CA is already installed in the Windows certificate store, run `$env:NODE_USE_SYSTEM_CA="1"; npm install` in PowerShell. Otherwise obtain the trusted PEM CA chain for the network proxy or institutional certificate authority from its administrator, then configure npm with that CA file (for example, `npm config set cafile "C:\path\trusted-ca.pem"`) or configure Node's `NODE_EXTRA_CA_CERTS` outside the repository. Do not use `strict-ssl=false`, `NODE_TLS_REJECT_UNAUTHORIZED=0`, or an unverified certificate. Retry the build only after the valid trust chain and proxy configuration are in place.
 
 ## Data and privacy

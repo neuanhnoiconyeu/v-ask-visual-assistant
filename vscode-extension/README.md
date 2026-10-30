@@ -12,6 +12,12 @@ V-Ask brings the local V-Ask Python backend into VS Code through an Activity Bar
 
 The backend starts only when V-Ask needs it. It binds to loopback and uses a random token created by the extension. API keys remain in the Python environment or Streamlit secrets configuration; they are not sent to the webview.
 
+## Backend discovery and one-time setup
+
+When the V-Ask repository itself is open, the extension detects a backend only when that workspace folder directly contains `vask_service.py`, `llm_client.py`, and `config.py`. For any other project, run **V-Ask: Configure Backend** from the Command Palette or the sidebar. Select either the V-Ask repository folder or its `vask_service.py` file; the extension validates it, starts a loopback health check, then saves the validated repository path in user settings. It never searches the disk or runs a selected script other than the validated V-Ask service.
+
+`vask.pythonPath` takes priority when set. Otherwise the extension checks `.venv` then `venv` in the configured backend repository before falling back to system Python. Use **V-Ask: Test Backend Connection** for a safe startup and health check, and open Output → **V-Ask** for redacted diagnostics.
+
 ## Commands
 
 Use the Command Palette for **V-Ask: Open Assistant**, **Explain Selection**, **Explain Active File**, **Debug Selection**, **Review Selection**, **Generate Tests**, and **Refresh Project Index**.
@@ -20,7 +26,7 @@ Use the Command Palette for **V-Ask: Open Assistant**, **Explain Selection**, **
 
 Enter a requested change in the assistant composer and choose **Propose change**. Each returned proposal lists affected files, reasons, and a unified diff. **Open native diff** compares service-supplied in-memory before/after documents with VS Code's diff editor; it does not write preview files. **Apply reviewed changes** always asks for a modal confirmation, then the local backend rechecks the workspace root, path safety, symlink rules, and file hashes before any atomic write. **Reject proposal** never changes project files.
 
-The extension source has not yet been TypeScript-compiled or packaged in this environment because `npm install` is blocked by a certificate-chain error. Treat this workflow as source-level implementation until the build and manual runtime checks in `docs/PHASE5_TESTING.md` succeed.
+The extension must be TypeScript-compiled and packaged before installation. Run the manual runtime checks in `docs/PHASE5_TESTING.md` after installation; package success alone does not verify sidebar interaction or Nebius responses.
 
 ## Packaging
 
